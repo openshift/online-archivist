@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"io/ioutil"
 
@@ -9,12 +10,12 @@ import (
 
 var defaultProtectedNamespaces = []string{"default", "openshift-infra"}
 
+// NamespaceCapacity defines the high and low watermarks for number of namespaces in the cluster.
 type NamespaceCapacity struct {
-
-	// HighWatermark is the number of clusters that will trigger more aggressive archival.
+	// HighWatermark is the number of namespaces that will trigger more aggressive archival.
 	HighWatermark int `yaml:"highWatermark"`
 
-	// LowWatermark is the number of clusters we will attempt to get to when the HighWatermark
+	// LowWatermark is the number of namespaces we will attempt to get to when the HighWatermark
 	// has been reached.
 	LowWatermark int `yaml:"lowWatermark"`
 }
@@ -23,26 +24,31 @@ type NamespaceCapacity struct {
 // will manage capacity for.
 type ClusterConfig struct {
 	// Name is a user specified name to identify a particular cluster being managed.
-	Name              string            `yaml:"name"`
+	Name string `yaml:"name"`
+	// NamespaceCapacity represents the high and low watermarks for number of namespaces in the cluster.
 	NamespaceCapacity NamespaceCapacity `yaml:"namespaceCapacity"`
-	// You *may* be archived if inactive beyond than this number of days, if we need to reclaim space:
+	// MinInactiveDays defines the limit of inactivity after which you *may* be archived, if we need to reclaim space. You will never be archived if active within this number of days.
 	MinInactiveDays int `yaml:"minInactiveDays"`
-	// You *will* be archived if inactive beyond this number of days:
+	// MaxInactiveDays defines the limit of inactivity after which you *will* be archived.
 	MaxInactiveDays int `yaml:"maxInactiveDays"`
-	// Namespaces which can *never* be archived:
+	// ProtectedNamespaces which can *never* be archived.
 	ProtectedNamespaces []string `yaml:"protectedNamespaces"`
 }
 
+// ArchivistConfig is the top level configuration object for all components used in archival.
 type ArchivistConfig struct {
-	LogLevel string          `yaml:"logLevel"`
+	// LogLevel is the desired log level for the pods. (debug, info, warn, error, fatal, panic)
+	LogLevel string `yaml:"logLevel"`
+	// Clusters contains specific configuration for each cluster the Archivist is managing.
 	Clusters []ClusterConfig `yaml:"clusters"`
 }
 
+// NewArchivistConfigFromString creates a new configuration from a yaml string. (Mainly used in testing.)
 func NewArchivistConfigFromString(yamlConfig string) (ArchivistConfig, error) {
-	cfg, err := newArchivist([]byte(yamlConfig))
-	return cfg, err
+	return newArchivist([]byte(yamlConfig))
 }
 
+// NewArchivistConfigFromString creates a new configuration from a yaml file at the given path.
 func NewArchivistConfigFromFile(filepath string) (ArchivistConfig, error) {
 	if data, readErr := ioutil.ReadFile(filepath); readErr != nil {
 		return ArchivistConfig{}, readErr
@@ -52,6 +58,7 @@ func NewArchivistConfigFromFile(filepath string) (ArchivistConfig, error) {
 	}
 }
 
+// NewDefaultArchivistConfig creates a new config with default settings.
 func NewDefaultArchivistConfig() ArchivistConfig {
 	cfg := ArchivistConfig{
 		Clusters: []ClusterConfig{
@@ -60,7 +67,8 @@ func NewDefaultArchivistConfig() ArchivistConfig {
 			},
 		},
 	}
-	ApplyConfigDefaults(&cfg)
+	cfg.Complete()
+	cfg.Validate()
 	return cfg
 }
 
@@ -70,48 +78,39 @@ func newArchivist(data []byte) (ArchivistConfig, error) {
 	if err != nil {
 		return cfg, err
 	}
-	ApplyConfigDefaults(&cfg)
-	fmt.Println("defaulting 3")
-	if len(cfg.Clusters) > 0 {
-		fmt.Println(cfg.Clusters[0].ProtectedNamespaces)
-	}
-	err = ValidateConfig(&cfg)
+	cfg.Complete()
+	err = cfg.Validate()
 	return cfg, err
 }
 
-func ApplyConfigDefaults(cfg *ArchivistConfig) {
+// Complete applies non-zero config defaults for settings that are not defined.
+func (cfg *ArchivistConfig) Complete() {
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"
 	}
+	// If no protected clusters are defined we need to make sure we set some defaults
+	// for a typical OpenShift cluster.
 	for i := range cfg.Clusters {
 		if len(cfg.Clusters[i].ProtectedNamespaces) == 0 {
-			// TODO: is this re-use of a package var array safe?
 			cfg.Clusters[i].ProtectedNamespaces = make([]string, len(defaultProtectedNamespaces))
 			copy(cfg.Clusters[i].ProtectedNamespaces, defaultProtectedNamespaces)
-			fmt.Println("defaulting 1")
-			fmt.Println(cfg.Clusters[i].ProtectedNamespaces)
 		}
-	}
-	fmt.Println("defaulting 2")
-	if len(cfg.Clusters) > 0 {
-		fmt.Println(cfg.Clusters[0].ProtectedNamespaces)
 	}
 }
 
-func ValidateConfig(cfg *ArchivistConfig) error {
+// Validate ensures this configuration is valid and returns an error if not.
+func (cfg *ArchivistConfig) Validate() error {
 	if len(cfg.Clusters) == 0 {
 		return fmt.Errorf("no clusters in config")
 	}
 	for _, cc := range cfg.Clusters {
 		if cc.Name == "" {
-			return fmt.Errorf("cluster must have a name")
+			return errors.New("cluster must have a name")
 		}
 		if cc.MaxInactiveDays < cc.MinInactiveDays {
-			return fmt.Errorf("maxInactiveDays must be greater than minInactiveDays")
+			return fmt.Errorf("maxInactiveDays (%d) must be greater than or equal to minInactiveDays (%d)",
+				cc.MaxInactiveDays, cc.MinInactiveDays)
 		}
-	}
-	if cfg.LogLevel == "" {
-		return fmt.Errorf("invalid log level: %s", cfg.LogLevel)
 	}
 	return nil
 }

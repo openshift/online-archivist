@@ -12,8 +12,7 @@ endif
 
 # Builds and installs the archivist binary.
 build: check-gopath
-	go install \
-		github.com/openshift/online/archivist/cmd/archivist
+	go install
 .PHONY: build
 
 

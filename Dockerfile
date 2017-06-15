@@ -1,5 +1,3 @@
-# Free Tier Force Sleep controller
-
 #FROM rhel7.2:7.2-released
 FROM golang:1.7
 

@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -101,10 +100,6 @@ clusters:
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			testLogger := log.WithFields(log.Fields{
-				"test": tc.name,
-			})
-			testLogger.Infof("starting test")
 			cfg, err := NewArchivistConfigFromString(tc.configStr)
 			if tc.expectedErrContains != "" {
 				if assert.NotNil(t, err) {

@@ -66,6 +66,10 @@ func fakeRC(projName string, name string, created time.Time) *kapi.ReplicationCo
 	return &rc
 }
 
+func tm(year int, month time.Month, day int) time.Time {
+	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+}
+
 func TestNamespaceLastActivity(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -91,7 +95,7 @@ func TestNamespaceLastActivity(t *testing.T) {
 					builds: []*buildapi.Build{
 						fakeBuild("namespace1", "build-1", tm(2016, time.November, 1)),
 						fakeBuild("namespace1", "build-2", tm(2017, time.May, 19)),
-						fakeBuild("namespace1", "build-3", tm(2017, time.January, 01)),
+						fakeBuild("namespace1", "build-3", tm(2017, time.January, 1)),
 					},
 					expectedLastActivity: tm(2017, time.May, 19),
 				},
@@ -103,16 +107,6 @@ func TestNamespaceLastActivity(t *testing.T) {
 						fakeBuild("namespace2", "build-3", tm(2017, time.May, 1)),
 					},
 					expectedLastActivity: tm(2017, time.May, 1),
-				},
-			},
-		},
-		{
-			name: "no builds namespace",
-			namespaces: []NamespaceTestData{
-				{
-					name:                 "namespace1",
-					builds:               []*buildapi.Build{},
-					expectedLastActivity: time.Time{},
 				},
 			},
 		},
@@ -239,10 +233,6 @@ func TestNamespaceLastActivity(t *testing.T) {
 type NamespaceCapacityTestData struct {
 	name         string
 	lastActivity time.Time
-}
-
-func tm(year int, month time.Month, day int) time.Time {
-	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
 }
 
 func TestGetNamespacesToArchive(t *testing.T) {
@@ -372,8 +362,8 @@ func TestGetNamespacesToArchive(t *testing.T) {
 				cm.nsIndexer.Add(fakeNamespace(p.name))
 			}
 
-			archiveNamespaces, err := cm.getNamespacesToArchive(tm(2017, time.May, 29))
-			if assert.Nil(t, err) {
+			archiveNamespaces, err := cm.getNamespacesToArchive(tc.checkTime)
+			if assert.NoError(t, err) {
 				assertNamespaces(t, tc.expected, archiveNamespaces)
 			}
 		})
@@ -393,5 +383,4 @@ func assertNamespaces(t *testing.T, expected []string, archiveNamespaces []LastA
 			assert.True(t, found, fmt.Sprintf("namespace %s was not found in results", expectedName))
 		}
 	}
-
 }

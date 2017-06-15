@@ -1,7 +1,6 @@
 package clustermonitor
 
 import (
-	"errors"
 	"fmt"
 	"github.com/openshift/online/archivist/pkg/config"
 	"sort"
@@ -143,6 +142,7 @@ func (a *ClusterMonitor) Run(stopChan <-chan struct{}) {
 // checkCapacity checks the capacity by all configured metrics and determines what (if any) namespaces need to
 // be archived.
 func (a *ClusterMonitor) checkCapacity() {
+	// TODO: handle error here
 	a.getNamespacesToArchive(time.Now())
 	// TODO: trigger actual archival for each namespace here
 }
@@ -159,17 +159,16 @@ func (a LastActivitySorter) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a LastActivitySorter) Less(i, j int) bool { return a[i].Time.Before(a[j].Time) }
 
 func (a *ClusterMonitor) getNamespacesToArchive(checkTime time.Time) ([]LastActivity, error) {
-
 	capLog := log.WithFields(log.Fields{
-		"component": "capacitycheck",
+		"component": logComponent,
 	})
 	if a.clusterCfg.NamespaceCapacity.HighWatermark == 0 {
 		capLog.Warnln("no namespace capacity high watermark defined, skipping")
-		return []LastActivity{}, nil
+		return nil, nil
 	}
 	if a.clusterCfg.NamespaceCapacity.LowWatermark == 0 {
 		capLog.Warnln("no namespace capacity low watermark defined, skipping")
-		return []LastActivity{}, nil
+		return nil, nil
 	}
 	// TODO: max/min inactive must be defined? or catch in config validation
 
@@ -182,7 +181,6 @@ func (a *ClusterMonitor) getNamespacesToArchive(checkTime time.Time) ([]LastActi
 
 	// Calculate last activity time for all namespaces and sort it:
 
-	//namespaceCount := len(namespaces)
 	namespaces := a.nsIndexer.List()
 	capLog.WithFields(log.Fields{
 		"checkTime":     checkTime,
@@ -192,15 +190,16 @@ func (a *ClusterMonitor) getNamespacesToArchive(checkTime time.Time) ([]LastActi
 		"lowWatermark":  a.clusterCfg.NamespaceCapacity.LowWatermark,
 	}).Infoln("calculating namespaces to be archived")
 
-	for _, pt := range namespaces {
-		namespace := pt.(*kapi.Namespace)
+	for _, nsPtr := range namespaces {
+		namespace := nsPtr.(*kapi.Namespace)
 		if stringInSlice(namespace.Name, a.clusterCfg.ProtectedNamespaces) {
 			capLog.WithFields(log.Fields{"namespace": namespace.Name}).Debugln("skipping protected namespace")
 			continue
 		}
 		lastActivity, err := a.getLastActivity(namespace.Name)
 		if err != nil {
-			return []LastActivity{}, err
+			capLog.Errorln(err)
+			return nil, err
 		}
 		if lastActivity.IsZero() {
 			capLog.WithFields(log.Fields{"namespace": namespace.Name}).Warnln("no last activity time calculated for namespace")
@@ -231,7 +230,8 @@ func (a *ClusterMonitor) getNamespacesToArchive(checkTime time.Time) ([]LastActi
 		"somewhatInactive": len(somewhatInactive),
 	}).Infoln("last activity totals")
 
-	namespacesToArchive := make([]LastActivity, len(veryInactive), (cap(veryInactive)+1)*2)
+	namespacesToArchive := make([]LastActivity, len(veryInactive),
+		len(veryInactive)+len(somewhatInactive))
 	copy(namespacesToArchive, veryInactive)
 	newNSCount := len(namespaces) - len(namespacesToArchive)
 
@@ -250,9 +250,9 @@ func (a *ClusterMonitor) getNamespacesToArchive(checkTime time.Time) ([]LastActi
 			namespacesToArchive = append(namespacesToArchive, somewhatInactive...)
 		} else {
 			// Only now do we actually need to sort, and only the namespaces eligible for archival.
-			// Sort into ascending order, and we will use the namespaces at the start of the slice.
+			// Sort into ascending order, and we will use the namespaces at the start of the slice
 			// (i.e. those with the most recent activity get to remain, despite being within the
-			// threshold for archival)
+			// threshold for archival).
 			sort.Sort(LastActivitySorter(somewhatInactive))
 			namespacesToArchive = append(namespacesToArchive,
 				somewhatInactive[0:targetCount]...)
@@ -271,10 +271,9 @@ func (a *ClusterMonitor) getNamespacesToArchive(checkTime time.Time) ([]LastActi
 	}
 
 	return namespacesToArchive, nil
-
 }
 
-// GetLastActivity returns the last activity time for a namespace by examining it's builds and replication controllers.
+// GetLastActivity returns the last activity time for a namespace by examining its builds and replication controllers.
 // If no builds or replication controllers are found we return nil. If the namespace does not exist, we return an error.
 func (a *ClusterMonitor) GetLastActivity(namespace string) (time.Time, error) {
 	// return an error if the namespace doesn't exist
@@ -283,11 +282,10 @@ func (a *ClusterMonitor) GetLastActivity(namespace string) (time.Time, error) {
 		return time.Time{}, err
 	}
 	if !exists {
-		return time.Time{}, errors.New(fmt.Sprintf("namespace does not exist in cache: %s", namespace))
+		return time.Time{}, fmt.Errorf("namespace does not exist in cache: %s", namespace)
 	}
 
-	tm, err := a.getLastActivity(namespace)
-	return tm, err
+	return a.getLastActivity(namespace)
 }
 
 func stringInSlice(a string, list []string) bool {
@@ -300,7 +298,6 @@ func stringInSlice(a string, list []string) bool {
 }
 
 func (a *ClusterMonitor) getLastActivity(namespace string) (time.Time, error) {
-
 	nsLog := log.WithFields(log.Fields{
 		"namespace": namespace,
 		"component": logComponent,
@@ -329,9 +326,8 @@ func (a *ClusterMonitor) getLastActivity(namespace string) (time.Time, error) {
 		// Build may briefly have no start timestamp, ignore it:
 		if b.Status.StartTimestamp == nil {
 			nsLog.WithFields(log.Fields{
-				"namespace": namespace,
-				"name":      b.Name,
-				"kind":      "Build",
+				"name": b.Name,
+				"kind": "Build",
 			}).Debugln("skipping build with no start time")
 			continue
 		}
@@ -348,7 +344,7 @@ func (a *ClusterMonitor) getLastActivity(namespace string) (time.Time, error) {
 
 	for _, obj := range rcs {
 		r := obj.(*kapi.ReplicationController)
-		if r.ObjectMeta.CreationTimestamp.Time == (time.Time{}) {
+		if r.ObjectMeta.CreationTimestamp.Time.IsZero() {
 			nsLog.WithFields(log.Fields{
 				"name": r.Name,
 				"kind": "ReplicationController",
@@ -362,7 +358,7 @@ func (a *ClusterMonitor) getLastActivity(namespace string) (time.Time, error) {
 				"lastActivity": lastActivity,
 				"kind":         "ReplicationController",
 				"name":         r.Name,
-			}).Debugln("updating namespace in cache")
+			}).Debugln("updating last activity time")
 		}
 	}
 
