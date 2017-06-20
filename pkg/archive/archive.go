@@ -1,4 +1,4 @@
-package freetier
+package archive
 
 import (
 	"fmt"
@@ -8,15 +8,18 @@ import (
 	"github.com/openshift/origin/pkg/cmd/admin/policy"
 	"github.com/openshift/origin/pkg/cmd/server/bootstrappolicy"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
-	projectapi "github.com/openshift/origin/pkg/project/api"
-	userapi "github.com/openshift/origin/pkg/user/api"
+	projectapi "github.com/openshift/origin/pkg/project/apis/project"
+	userapi "github.com/openshift/origin/pkg/user/apis/user"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/meta"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/kubectl"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	"k8s.io/kubernetes/pkg/kubectl/resource"
-	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/kubernetes/pkg/printers"
+
+	log "github.com/Sirupsen/logrus"
 )
 
 type Archiver struct {
@@ -24,89 +27,129 @@ type Archiver struct {
 	identities           osclient.IdentityInterface
 	userIdentityMappings osclient.UserIdentityMappingInterface
 	projects             osclient.ProjectInterface
-	openshiftClient      osclient.Interface
-	client               *osclient.Client
+	oc                   osclient.Interface
+	kc                   kclientset.Interface
 	f                    *clientcmd.Factory
 	mapper               meta.RESTMapper
 	typer                runtime.ObjectTyper
 	userObjects          []runtime.Object
 	projectObjects       []runtime.Object
-	unarchivalNamespace  string
+	namespace            string
+	log                  *log.Entry
+	username             string
 }
 
 func NewArchiver(users osclient.UserInterface, projects osclient.ProjectInterface,
 	identities osclient.IdentityInterface, userIdentityMappings osclient.UserIdentityMappingInterface,
-	f *clientcmd.Factory, openshiftClient osclient.Interface, client *osclient.Client, namespace string) *Archiver {
+	f *clientcmd.Factory, oc osclient.Interface, kc kclientset.Interface, namespace string, username string) *Archiver {
 
+	aLog := log.WithFields(log.Fields{
+		"namespace": namespace,
+		"user":      username,
+	})
 	mapper, typer := f.Object()
 	return &Archiver{
 		users:                users,
 		projects:             projects,
 		identities:           identities,
 		userIdentityMappings: userIdentityMappings,
-		openshiftClient:      openshiftClient,
-		client:               client,
+		oc:                   oc,
+		kc:                   kc,
 		userObjects:          []runtime.Object{},
 		projectObjects:       []runtime.Object{},
 		f:                    f,
 		mapper:               mapper,
 		typer:                typer,
-		unarchivalNamespace:  namespace,
+		namespace:            namespace,
+		log:                  aLog,
+		username:             username,
 	}
 }
 
-// Export projects where user is admin to a single .json file and delete those projects
-func (a *Archiver) ArchiveUser(username string) error {
-	// Get all projects
-	projects, err := a.projects.List(kapi.ListOptions{})
+// Export projects where user is admin to a single .yaml file and delete those projects
+func (a *Archiver) Archive() error {
+
+	a.log.Info("beginning archival")
+	projectName := a.namespace
+
+	project, err := a.projects.Get(projectName, metav1.GetOptions{})
 	if err != nil {
+		a.log.Errorln("unable to lookup project", err)
 		return err
 	}
+	a.log.Info("got project", project)
 
-	for _, project := range projects.Items {
-		projectName := project.ObjectMeta.Name
+	// Check if user is admin for current project, if so then archive
+	// and add project to exported template
 
-		// Check if user is admin for current project, if so then archive
-		// and add project to exported template
-		if a.userIsRole(projectName, username, "admin") {
-			if err != nil {
-				fmt.Println(err)
-			}
+	// Find user's role binding for this project and archive it:
+	a.log.Debugln("checking role bindings")
+	rbs, err := a.oc.RoleBindings(a.namespace).List(metav1.ListOptions{})
+	if err != nil {
+		a.log.Errorln("unable to list role bindings")
+		return err
+	}
+	a.log.Debugf("found %d role bindings", len(rbs.Items))
 
-			// Get all resources for this project and archive them
-			r := resource.NewBuilder(a.mapper, a.typer, resource.ClientMapperFunc(a.f.ClientForMapping), kapi.Codecs.UniversalDecoder()).
-				NamespaceParam(projectName).RequireNamespace().
-				ResourceTypeOrNameArgs(true, "all").
-				Flatten().
-				Do()
-
-			err = r.Visit(func(info *resource.Info, err error) error {
-				// Don't need pods, RCs
-				if info.ResourceMapping().Resource != "pods" &&
-					info.ResourceMapping().Resource != "replicationcontrollers" {
-					resourceName := fmt.Sprintf("%s/%s", info.ResourceMapping().Resource, info.Name)
-
-					// Archive the resource
-					fmt.Printf("Archiving: %s\n", resourceName)
-					a.archive(resourceName, projectName)
+	for _, rb := range rbs.Items {
+		a.log.Debug("checking role binding:", rb.RoleRef.Name)
+		// We're looking specifically for the admin role:
+		if rb.RoleRef.Name == "admin" {
+			for _, user := range rb.Subjects {
+				a.log.Debug("checking subject:", user.Name)
+				if user.Name == a.username {
+					resourceName := fmt.Sprintf("rolebindings/%s", rb.ObjectMeta.Name)
+					err := a.archive(resourceName, a.namespace)
+					if err != nil {
+						return err
+					}
 				}
-				return nil
-			})
-
-			// Archive the user, along with their identity and identitymapping
-			a.archiveUserIdentity(username, projectName)
-
-			// Must delete project last, but have it be the first item in the
-			// List template, so that it will be created first during unarchival
-			projectResourceName := fmt.Sprintf("project/%s", projectName)
-			fmt.Printf("Archiving: %s\n", projectResourceName)
-			a.archive(projectResourceName, projectName)
+			}
 		}
 	}
 
+	// Get all resources for this project and archive them
+	a.log.Debugln("listing all project resources")
+	r := resource.NewBuilder(a.mapper, a.typer, resource.ClientMapperFunc(a.f.ClientForMapping),
+		kapi.Codecs.UniversalDecoder()).
+		NamespaceParam(projectName).DefaultNamespace().AllNamespaces(false).
+		ResourceTypeOrNameArgs(true, "all").
+		Flatten()
+
+	err = r.Do().Visit(func(info *resource.Info, err error) error {
+		a.log.Debugln("visiting", info.Object.GetObjectKind(), info.Name)
+		// We do not want to archive transient objects such as pods or replication controllers:
+		if info.ResourceMapping().Resource != "pods" &&
+			info.ResourceMapping().Resource != "replicationcontrollers" {
+			resourceName := fmt.Sprintf("%s/%s", info.ResourceMapping().Resource, info.Name)
+
+			// Archive the resource
+			err := a.archive(resourceName, projectName)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
+	a.log.Debugln("archiving user identity")
+	// Archive the user, along with their identity and identitymapping
+	a.archiveUserIdentity(a.username, projectName)
+
+	// Must delete project last, but have it be the first item in the
+	// List template, so that it will be created first during unarchival
+	a.log.Debugln("archiving project")
+	projectResourceName := fmt.Sprintf("project/%s", projectName)
+	err = a.archive(projectResourceName, projectName)
+	if err != nil {
+		a.log.Error("error archiving project")
+		return err
+	}
+
+	a.log.Debugln("creating template")
 	// Make exported "template", which is really just a List of resources
 	template := &kapi.List{
-		ListMeta: unversioned.ListMeta{},
+		ListMeta: metav1.ListMeta{},
 		Items:    append(a.projectObjects, a.userObjects...),
 	}
 
@@ -114,156 +157,54 @@ func (a *Archiver) ArchiveUser(username string) error {
 	clientConfig, err := a.f.ClientConfig()
 	var result runtime.Object
 	outputVersion := *clientConfig.GroupVersion
-	result, err = kapi.Scheme.ConvertToVersion(template, outputVersion.String())
+	result, err = kapi.Scheme.ConvertToVersion(template, outputVersion)
 	if err != nil {
 		return err
 	}
 
-	// Save template list
-	if err := exportTemplate(result, username); err != nil {
+	if err := a.exportTemplate(result); err != nil {
 		return err
 	}
+
+	// TODO: make this optional, may just be looking to backup?
+	a.projects.Delete(projectName)
 
 	return nil
 }
 
-// Import a .json file and create the resources contained therein
-// TODO user role bindings so that same permissions get restored to project
-func (a *Archiver) UnarchiveUser(username string) error {
-	filename := fmt.Sprintf("%s.json", username)
-	_, explicit, err := a.f.DefaultNamespace()
-	if err != nil {
-		fmt.Println(err)
-	}
-
-	// Create resource and Infos from .json template file
-	r := resource.NewBuilder(a.mapper, a.typer, resource.ClientMapperFunc(a.f.ClientForMapping), kapi.Codecs.UniversalDecoder()).
-		FilenameParam(explicit, filename).
-		Flatten().
-		Do()
-
-	// Visit each Info from template and create corresponding resource
-	err = r.Visit(func(info *resource.Info, err error) error {
-		if err != nil {
-			return err
-		}
-
-		// Resources should be created under project namespace
-		switch info.ResourceMapping().Resource {
-		case "projects":
-			// Check if project is being created in original namespace or a new one
-			if a.unarchivalNamespace == "" {
-				a.unarchivalNamespace = info.Name
-			} else {
-				info.Object.(*projectapi.Project).ObjectMeta.Name = a.unarchivalNamespace
-			}
-			fmt.Printf("Unarchiving: %s/%s in namespace %s\n", info.ResourceMapping().Resource, info.Name, a.unarchivalNamespace)
-			obj, err := resource.NewHelper(info.Client, info.Mapping).Create(a.unarchivalNamespace, true, info.Object)
-
-			// Add default service account role bindings to newly-created project
-			for _, binding := range bootstrappolicy.GetBootstrapServiceAccountProjectRoleBindings(a.unarchivalNamespace) {
-				addRole := &policy.RoleModificationOptions{
-					RoleName:            binding.RoleRef.Name,
-					RoleNamespace:       binding.RoleRef.Namespace,
-					RoleBindingAccessor: policy.NewLocalRoleBindingAccessor(a.unarchivalNamespace, a.client),
-					Subjects:            binding.Subjects,
-				}
-				if err := addRole.AddRole(); err != nil {
-					fmt.Printf("Could not add service accounts to the %v role: %v\n", binding.RoleRef.Name, err)
-					return err
-				}
-			}
-			if err != nil {
-				return err
-			}
-			info.Refresh(obj, true)
-		case "users":
-			fmt.Printf("Unarchiving: %s/%s in namespace %s\n", info.ResourceMapping().Resource, info.Name, a.unarchivalNamespace)
-			obj, err := resource.NewHelper(info.Client, info.Mapping).Create(a.unarchivalNamespace, true, info.Object)
-			if err != nil {
-				return err
-			}
-			info.Refresh(obj, true)
-			_, err = a.userIdentityMappings.Create(&userapi.UserIdentityMapping{
-				User:     kapi.ObjectReference{Name: username},
-				Identity: kapi.ObjectReference{Name: "anypassword:" + username},
-			})
-			if err != nil {
-				fmt.Println(err)
-			}
-			info.Refresh(obj, true)
-		default:
-			fmt.Printf("Unarchiving: %s/%s in namespace %s\n", info.ResourceMapping().Resource, info.Name, a.unarchivalNamespace)
-			obj, err := resource.NewHelper(info.Client, info.Mapping).Create(a.unarchivalNamespace, true, info.Object)
-			if err != nil {
-				return err
-			}
-			info.Refresh(obj, true)
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-// userIsRole iterates through the role bindings for a specific project (rbs)
-// and checks if the user requested through the username flag has the requested
-// role binding in the project. If they do, it will archive that rolebinding
-func (a *Archiver) userIsRole(projectName, username, role string) bool {
-	rbs, err := a.openshiftClient.RoleBindings(projectName).List(kapi.ListOptions{})
-	if err != nil {
-		fmt.Println(err)
-		return false
-	}
-
-	for _, rb := range rbs.Items {
-		if rb.RoleRef.Name == role {
-			for _, user := range rb.Subjects {
-				if user.Name == username {
-					resourceName := fmt.Sprintf("rolebindings/%s", rb.ObjectMeta.Name)
-					fmt.Printf("Archiving: %s\n", resourceName)
-					a.archive(resourceName, projectName)
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
-// archiveProject creates a JSON template of a project and deletes the project from openshift
-func (a *Archiver) archive(name, namespace string) {
-	b := resource.NewBuilder(a.mapper, a.typer, resource.ClientMapperFunc(a.f.ClientForMapping), kapi.Codecs.UniversalDecoder()).
+// archiveProject creates a yaml template of a project and deletes the project from openshift
+func (a *Archiver) archive(name, namespace string) error {
+	a.log.WithFields(log.Fields{"name": name}).Infoln("archiving object")
+	b := resource.NewBuilder(a.mapper, a.typer, resource.ClientMapperFunc(a.f.ClientForMapping),
+		kapi.Codecs.UniversalDecoder()).
 		NamespaceParam(namespace).DefaultNamespace().
 		ResourceTypeOrNameArgs(true, name).
 		Flatten()
 
 	one := false
-	infos, err := b.Do().IntoSingular(&one).Infos()
+	infos, err := b.Do().IntoSingleItemImplied(&one).Infos()
 	if err != nil {
-		fmt.Println(err)
+		a.log.WithFields(log.Fields{"name": name}).Errorln("error getting infos:", err)
+		return err
 	}
+	a.log.WithFields(log.Fields{"name": name}).Infoln("got info")
 
 	// May be redundant/unnecessary config settings
 	clientConfig, err := a.f.ClientConfig()
 	outputVersion := *clientConfig.GroupVersion
-	objects, err := resource.AsVersionedObjects(infos, outputVersion.String(), kapi.Codecs.LegacyCodec(outputVersion))
+	objects, err := resource.AsVersionedObjects(infos, outputVersion, kapi.Codecs.LegacyCodec(outputVersion))
 	if err != nil {
-		fmt.Println(err)
+		a.log.Errorln("versioned objects error", err)
+		return err
 	}
 
-	// Delete resource, if it is not a user identity resource
 	err = b.Do().Visit(func(info *resource.Info, err error) error {
 		if err != nil {
 			return err
 		}
 
-		delete := true
 		switch info.ResourceMapping().Resource {
 		case "users", "identities", "useridentitymappings":
-			delete = false
 			for _, object := range objects {
 				a.userObjects = append(a.userObjects, object)
 			}
@@ -277,18 +218,17 @@ func (a *Archiver) archive(name, namespace string) {
 			}
 		}
 
-		if delete == true {
-			if err := resource.NewHelper(info.Client, info.Mapping).Delete(info.Namespace, info.Name); err != nil {
-				return err
-			}
-		}
 		return nil
 	})
+	return err
 }
 
 // Archives the user identity resources (user, identity) and deletes the
 // user identity mapping. These need to be archived and deleted in a specific order
-func (a *Archiver) archiveUserIdentity(username, namespace string) {
+// Should we bother this? Why not recreate new in the new cluster and just restore objects the user
+// is genuinely interested in.
+func (a *Archiver) archiveUserIdentity(username, namespace string) error {
+	// TODO: watchout for this
 	identityProvider := "anypassword"
 	identityName := identityProvider + ":" + username
 
@@ -299,28 +239,113 @@ func (a *Archiver) archiveUserIdentity(username, namespace string) {
 	// Otherwise the user won't get bound to the newly-created identity when unarchived
 	a.userIdentityMappings.Delete(identityName)
 
-	fmt.Printf("Archiving: %s\n", identityResourceName)
-	a.archive(identityResourceName, "")
-	a.identities.Delete(identityName)
-
-	fmt.Printf("Archiving: %s\n", userResourceName)
-	a.archive(userResourceName, "")
-	a.users.Delete(username)
-}
-
-// exportTemplate takes a resultant object and prints it to a .json file
-func exportTemplate(obj runtime.Object, name string) error {
-	p, _, err := kubectl.GetPrinter("json", "")
+	err := a.archive(identityResourceName, "")
 	if err != nil {
 		return err
 	}
+	a.identities.Delete(identityName)
 
-	filename := fmt.Sprintf("%s.json", name)
+	err = a.archive(userResourceName, "")
+	if err != nil {
+		return err
+	}
+	a.users.Delete(username)
+	return nil
+}
+
+// exportTemplate takes a resultant object and prints it to a .yaml file
+func (a *Archiver) exportTemplate(obj runtime.Object) error {
+	p := printers.YAMLPrinter{}
+
+	filename := fmt.Sprintf("%s.yaml", a.username)
+	a.log.Infoln("writing to file", filename)
 	fo, err := os.Create(filename)
 	if err != nil {
 		panic(err)
 	}
 	err = p.PrintObj(obj, fo)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// Import a .yaml file and create the resources contained therein
+// TODO user role bindings so that same permissions get restored to project
+func (a *Archiver) Unarchive() error {
+	filenames := []string{fmt.Sprintf("%s.yaml", a.username)}
+	_, explicit, err := a.f.DefaultNamespace()
+	if err != nil {
+		return err
+	}
+
+	// Create resource and Infos from .yaml template file
+	r := resource.NewBuilder(a.mapper, a.typer, resource.ClientMapperFunc(a.f.ClientForMapping),
+		kapi.Codecs.UniversalDecoder()).
+		FilenameParam(explicit, &resource.FilenameOptions{Recursive: false, Filenames: filenames}).
+		Flatten().
+		Do()
+
+	// Visit each Info from template and create corresponding resource
+	err = r.Visit(func(info *resource.Info, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Resources should be created under project namespace
+		switch info.ResourceMapping().Resource {
+		case "projects":
+			// Check if project is being created in original namespace or a new one
+			if a.namespace == "" {
+				a.namespace = info.Name
+			} else {
+				info.Object.(*projectapi.Project).ObjectMeta.Name = a.namespace
+			}
+			a.log.Infoln("Unarchiving: %s/%s in namespace %s", info.ResourceMapping().Resource, info.Name, a.namespace)
+			obj, err := resource.NewHelper(info.Client, info.Mapping).Create(a.namespace, true, info.Object)
+
+			// Add default service account role bindings to newly-created project
+			for _, binding := range bootstrappolicy.GetBootstrapServiceAccountProjectRoleBindings(a.namespace) {
+				addRole := &policy.RoleModificationOptions{
+					RoleName:            binding.RoleRef.Name,
+					RoleNamespace:       binding.RoleRef.Namespace,
+					RoleBindingAccessor: policy.NewLocalRoleBindingAccessor(a.namespace, a.oc),
+					Subjects:            binding.Subjects,
+				}
+				if err := addRole.AddRole(); err != nil {
+					fmt.Printf("Could not add service accounts to the %v role: %v\n", binding.RoleRef.Name, err)
+					return err
+				}
+			}
+			if err != nil {
+				return err
+			}
+			info.Refresh(obj, true)
+		case "users":
+			a.log.Infoln("Unarchiving: %s/%s in namespace %s", info.ResourceMapping().Resource, info.Name, a.namespace)
+			obj, err := resource.NewHelper(info.Client, info.Mapping).Create(a.namespace, true, info.Object)
+			if err != nil {
+				return err
+			}
+			info.Refresh(obj, true)
+			_, err = a.userIdentityMappings.Create(&userapi.UserIdentityMapping{
+				User:     kapi.ObjectReference{Name: a.username},
+				Identity: kapi.ObjectReference{Name: "anypassword:" + a.username},
+			})
+			if err != nil {
+				return err
+			}
+			info.Refresh(obj, true)
+		default:
+			a.log.Infoln("Unarchiving: %s/%s in namespace %s", info.ResourceMapping().Resource, info.Name, a.namespace)
+			obj, err := resource.NewHelper(info.Client, info.Mapping).Create(a.namespace, true, info.Object)
+			if err != nil {
+				return err
+			}
+			info.Refresh(obj, true)
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}

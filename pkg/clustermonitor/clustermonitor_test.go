@@ -6,13 +6,13 @@ import (
 
 	"github.com/openshift/online/archivist/pkg/config"
 
-	buildapi "github.com/openshift/origin/pkg/build/api"
+	buildapi "github.com/openshift/origin/pkg/build/apis/build"
 	fakebuildclient "github.com/openshift/origin/pkg/build/generated/clientset/fake"
 	otestclient "github.com/openshift/origin/pkg/client/testclient"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	kapi "k8s.io/kubernetes/pkg/api"
 	kcache "k8s.io/client-go/tools/cache"
+	kapi "k8s.io/kubernetes/pkg/api"
 	ktestclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
 
 	"fmt"

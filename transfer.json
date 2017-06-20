@@ -1,0 +1,13 @@
+{
+	"source": {
+		"cluster": {
+			"namespace": "test"
+		}
+	},
+	"dest": {
+		"cluster": {
+			"namespace": "test-restore"
+		}
+	}
+
+}

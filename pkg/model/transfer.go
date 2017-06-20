@@ -17,4 +17,5 @@ type S3Location struct {
 
 // ClusterLocation represents an OpenShift cluster we are archiving a project from, or unarchiving to.
 type ClusterLocation struct {
+	Namespace string
 }

@@ -9,20 +9,20 @@ import (
 
 	oclient "github.com/openshift/origin/pkg/client"
 
-	buildapi "github.com/openshift/origin/pkg/build/api"
+	buildapi "github.com/openshift/origin/pkg/build/apis/build"
 	buildclient "github.com/openshift/origin/pkg/build/generated/clientset"
 
 	// Prevents "no kind registered for version" even with generated clientset use
 	// TODO: This shouldn't be required, may not be doing something correctly.
-	_ "github.com/openshift/origin/pkg/build/api/install"
+	//_ "github.com/openshift/origin/pkg/build/api/install"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apimachinery/pkg/watch"
 	kcache "k8s.io/client-go/tools/cache"
 	kapi "k8s.io/kubernetes/pkg/api"
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
-	"k8s.io/apimachinery/pkg/watch"
-	"k8s.io/apimachinery/pkg/util/wait"
 
 	log "github.com/Sirupsen/logrus"
 )

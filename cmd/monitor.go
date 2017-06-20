@@ -30,7 +30,7 @@ var clusterMonitorCmd = &cobra.Command{
 		log.SetOutput(os.Stdout)
 		archivistCfg := loadConfig(cfgFile)
 
-		clientConfig, oc, kc, err := createClients()
+		clientConfig, _, oc, kc, err := createClients()
 
 		if err != nil {
 			log.Panicf("error creating OpenShift/Kubernetes clients: %s", err)
@@ -54,12 +54,14 @@ var clusterMonitorCmd = &cobra.Command{
 	},
 }
 
-func createClients() (*restclient.Config, osclient.Interface, kclientset.Interface, error) {
+func createClients() (*restclient.Config, *clientcmd.Factory, osclient.Interface, kclientset.Interface, error) {
 	// TODO: multi cluster connections
 	// TODO: make use of for real deployments
 	// conf, err := restclient.InClusterConfig()
 	dcc := clientcmd.DefaultClientConfig(pflag.NewFlagSet("empty", pflag.ContinueOnError))
-	clientFac := clientcmd.NewFactory(dcc)
+	//clientFac := clientcmd.NewFactory(dcc)
+	clientFac := clientcmd.New(pflag.NewFlagSet("empty", pflag.ContinueOnError))
+
 	clientConfig, err := dcc.ClientConfig()
 	if err != nil {
 		log.Panicf("error creating cluster clientConfig: %s", err)
@@ -75,7 +77,7 @@ func createClients() (*restclient.Config, osclient.Interface, kclientset.Interfa
 	}).Infoln("Created OpenShift client clientConfig:")
 
 	oc, kc, err := clientFac.Clients()
-	return clientConfig, oc, kc, err
+	return clientConfig, clientFac, oc, kc, err
 }
 
 func loadConfig(configFile string) config.ArchivistConfig {

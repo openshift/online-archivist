@@ -5,17 +5,30 @@ import (
 	"io/ioutil"
 	"net/http"
 
+	"github.com/openshift/online/archivist/pkg/archive"
 	"github.com/openshift/online/archivist/pkg/model"
 
-	log "github.com/Sirupsen/logrus"
 	osclient "github.com/openshift/origin/pkg/client"
+	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
+
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+
+	log "github.com/Sirupsen/logrus"
 )
 
 // TransferHandler is a struct carrying objects we need to use to process each API request.
 type TransferHandler struct {
-	OpenshiftClient osclient.Interface
-	KubeClient      kclientset.Interface
+	oc osclient.Interface
+	kc kclientset.Interface
+	f  *clientcmd.Factory
+}
+
+func NewTransferHandler(factory *clientcmd.Factory, oc osclient.Interface, kc kclientset.Interface) TransferHandler {
+	return TransferHandler{
+		oc: oc,
+		kc: kc,
+		f:  factory,
+	}
 }
 
 // TransferHandler handles all transfer API requests.
@@ -36,15 +49,54 @@ func (th TransferHandler) initiateTransfer(r *http.Request) (httpStatus int, err
 	reqLog := log.WithFields(log.Fields{
 		"method": r.Method,
 	})
-	reqLog.Infoln("Handling request: ", r)
+	reqLog.Infoln("handling request: ", r)
 	var t model.Transfer
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
+		reqLog.Errorln(err)
 		return http.StatusBadRequest, err
 	}
 	if err := json.Unmarshal(body, &t); err != nil {
+		reqLog.Errorln(err)
 		return http.StatusBadRequest, err
 	}
 	reqLog.Infoln("parsed transfer", t)
+
+	if t.Source.Cluster != nil {
+		archiver := archive.NewArchiver(
+			th.oc.Users(),
+			th.oc.Projects(),
+			th.oc.Identities(),
+			th.oc.UserIdentityMappings(),
+			th.f,
+			th.oc,
+			th.kc,
+			t.Source.Cluster.Namespace,
+			"admin")
+		err := archiver.Archive()
+		if err != nil {
+			reqLog.Errorln(err)
+			return http.StatusInternalServerError, err
+		}
+	}
+
+	if t.Dest.Cluster != nil {
+		archiver := archive.NewArchiver(
+			th.oc.Users(),
+			th.oc.Projects(),
+			th.oc.Identities(),
+			th.oc.UserIdentityMappings(),
+			th.f,
+			th.oc,
+			th.kc,
+			t.Dest.Cluster.Namespace,
+			"admin")
+		err := archiver.Unarchive()
+		if err != nil {
+			reqLog.Errorln(err)
+			return http.StatusInternalServerError, err
+		}
+	}
+
 	return http.StatusAccepted, nil
 }

@@ -21,14 +21,14 @@ var archiverCmd = &cobra.Command{
 	Long:  `A REST API which will accept archival transfer requests and handle the transition and cleanup of a project to S3, or vice versa.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		log.SetOutput(os.Stdout)
-		//archivistCfg := loadConfig(cfgFile)
+		loadConfig(cfgFile)
 
-		_, oc, kc, err := createClients()
+		_, factory, oc, kc, err := createClients()
 		if err != nil {
 			log.Panicf("error creating OpenShift/Kubernetes clients: %s", err)
 		}
 
-		th := api.TransferHandler{oc, kc}
+		th := api.NewTransferHandler(factory, oc, kc)
 
 		router := mux.NewRouter().StrictSlash(true)
 		router.HandleFunc("/api/transfer", th.Handle)

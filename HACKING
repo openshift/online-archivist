@@ -1,0 +1,49 @@
+## Prerequisites
+
+  * Configured GOPATH
+  * $GOPATH/bin/ added to your PATH
+
+## Compile and Run Locally
+
+This method will run the archivist as whatever oc user is currently logged in.
+This method is likely best used when you have run `oc cluster up` on a
+workstation, logged in as system:admin, and want to run the archivist against
+the projects in that local test cluster.
+
+```
+oc cluster up
+oc login system:admin
+```
+
+Compile and run:
+
+```
+make build
+
+# Run the cluster monitor component:
+$ archivist monitor --config devel.cfg
+
+# Run the archive REST API:
+archivist archiver --config devel.cfg
+```
+
+Submit a request to the archive REST API:
+
+```
+$ curl -H "Content-Type: application/json" -X POST --data @transfer.json http://localhost:10000/api/transfer
+```
+
+## Deploy to Devenv
+
+The devenv playbooks incorporate the archivist, which can also be installed /
+re-installed by a separate playbook in ansible/archivist.yml. This install
+references a remote git branch and deployer key. You can override these
+settings if you are developing and wish to push to a separate branch, and then
+test changes from there. Add an ansible/vars/zz_custom_vars.yml and alter any
+settings you wish in there. This file should not be committed to git.
+
+Redeploy archivist with:
+
+```
+$ ansible-playbook -i hosts archivist.yml
+```
