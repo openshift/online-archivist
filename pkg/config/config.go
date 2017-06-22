@@ -39,8 +39,12 @@ type ClusterConfig struct {
 type ArchivistConfig struct {
 	// LogLevel is the desired log level for the pods. (debug, info, warn, error, fatal, panic)
 	LogLevel string `yaml:"logLevel"`
+
 	// Clusters contains specific configuration for each cluster the Archivist is managing.
 	Clusters []ClusterConfig `yaml:"clusters"`
+
+	// Dry-run flag to log but not actually archive projects
+	DryRun bool `yaml:"dryRun"`
 }
 
 // NewArchivistConfigFromString creates a new configuration from a yaml string. (Mainly used in testing.)
@@ -91,7 +95,9 @@ func (cfg *ArchivistConfig) Complete() {
 	// If no protected clusters are defined we need to make sure we set some defaults
 	// for a typical OpenShift cluster.
 	for i := range cfg.Clusters {
+		// if there are no protected namespaces
 		if len(cfg.Clusters[i].ProtectedNamespaces) == 0 {
+
 			cfg.Clusters[i].ProtectedNamespaces = make([]string, len(defaultProtectedNamespaces))
 			copy(cfg.Clusters[i].ProtectedNamespaces, defaultProtectedNamespaces)
 		}

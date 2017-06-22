@@ -31,6 +31,7 @@ var clusterMonitorCmd = &cobra.Command{
 		archivistCfg := loadConfig(cfgFile)
 
 		clientConfig, oc, kc, err := createClients()
+
 		if err != nil {
 			log.Panicf("error creating OpenShift/Kubernetes clients: %s", err)
 		}
@@ -47,6 +48,7 @@ var clusterMonitorCmd = &cobra.Command{
 		activityMonitor.Run(stopChan)
 
 		log.Infoln("cluster monitor running")
+		// Block until we receive a notification from the activityMonitor on the channel.
 		<-stopChan
 
 	},

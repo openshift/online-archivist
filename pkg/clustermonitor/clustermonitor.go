@@ -2,9 +2,10 @@ package clustermonitor
 
 import (
 	"fmt"
-	"github.com/openshift/online/archivist/pkg/config"
 	"sort"
 	"time"
+
+	"github.com/openshift/online/archivist/pkg/config"
 
 	oclient "github.com/openshift/origin/pkg/client"
 
@@ -263,6 +264,16 @@ func (a *ClusterMonitor) getNamespacesToArchive(checkTime time.Time) ([]LastActi
 	for _, ap := range namespacesToArchive {
 		capLog.Infoln("archiving:", ap.Namespace.Name)
 	}
+
+	dryRun := a.cfg.DryRun
+	if dryRun == false {
+		// here we would set up anything else needed in order to take the project snapshot and move to S3 before moving into archival specifics?
+		capLog.Infoln("Actual archiving will occur.")
+
+	} else {
+		capLog.Infoln("Logging without actual archival will occur.")
+	}
+
 	newNSCount = len(namespaces) - len(namespacesToArchive)
 	if newNSCount > a.clusterCfg.NamespaceCapacity.LowWatermark {
 		capLog.WithFields(log.Fields{
