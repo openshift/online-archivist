@@ -11,3 +11,12 @@ import:
   version: v0.11.5
   repo:    https://github.com/Sirupsen/logrus.git
   vcs:     git
+
+# WARNING: this is an unfortunate hack to work past an issue that surfaced with vendoring.
+# Without this the cluster monitor tests fail to compile after vendoring 3.6 with:
+#   undefined: grpc.SupportPackageIsVersion4
+# For some reason caused by importing: "github.com/openshift/origin/pkg/client/testclient"
+# Using this explicit grpc version works past by correctly picking up a version of grpc
+# that passes this compile check for etcd.
+- package: google.golang.org/grpc
+  version: v1.0.4

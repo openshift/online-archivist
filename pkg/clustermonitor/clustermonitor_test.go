@@ -7,12 +7,12 @@ import (
 	"github.com/openshift/online/archivist/pkg/config"
 
 	buildapi "github.com/openshift/origin/pkg/build/api"
-	fakebuildclient "github.com/openshift/origin/pkg/build/client/clientset_generated/internalclientset/fake"
+	fakebuildclient "github.com/openshift/origin/pkg/build/generated/clientset/fake"
 	otestclient "github.com/openshift/origin/pkg/client/testclient"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kunversioned "k8s.io/kubernetes/pkg/api/unversioned"
-	kcache "k8s.io/kubernetes/pkg/client/cache"
+	kcache "k8s.io/client-go/tools/cache"
 	ktestclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
 
 	"fmt"
@@ -33,7 +33,7 @@ type NamespaceTestData struct {
 
 func fakeNamespace(name string) *kapi.Namespace {
 	p := kapi.Namespace{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
 		},
 	}
@@ -41,9 +41,9 @@ func fakeNamespace(name string) *kapi.Namespace {
 }
 
 func fakeBuild(projName string, name string, start time.Time) *buildapi.Build {
-	buildStart := kunversioned.NewTime(start)
+	buildStart := metav1.NewTime(start)
 	b := buildapi.Build{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: projName,
 		},
@@ -55,9 +55,9 @@ func fakeBuild(projName string, name string, start time.Time) *buildapi.Build {
 }
 
 func fakeRC(projName string, name string, created time.Time) *kapi.ReplicationController {
-	uct := kunversioned.NewTime(created)
+	uct := metav1.NewTime(created)
 	rc := kapi.ReplicationController{
-		ObjectMeta: kapi.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:              name,
 			Namespace:         projName,
 			CreationTimestamp: uct,
@@ -195,7 +195,7 @@ func TestNamespaceLastActivity(t *testing.T) {
 			kc := &ktestclient.Clientset{}
 
 			aConfig := config.NewDefaultArchivistConfig()
-			cm := NewClusterMonitor(aConfig, aConfig.Clusters[0], oc, kc, bc.Core())
+			cm := NewClusterMonitor(aConfig, aConfig.Clusters[0], oc, kc, bc)
 
 			// Building our indexers to bypass the Informer framework, which is more
 			// complicated to test and looks to involve sleeping until the informer
@@ -343,7 +343,7 @@ func TestGetNamespacesToArchive(t *testing.T) {
 			aConfig.Clusters[0].MaxInactiveDays = tc.maxInactiveDays
 			aConfig.Clusters[0].MinInactiveDays = tc.minInactiveDays
 
-			cm := NewClusterMonitor(aConfig, aConfig.Clusters[0], oc, kc, bc.Core())
+			cm := NewClusterMonitor(aConfig, aConfig.Clusters[0], oc, kc, bc)
 
 			cm.nsIndexer = kcache.NewIndexer(kcache.MetaNamespaceKeyFunc, kcache.Indexers{})
 			cm.rcIndexer = kcache.NewIndexer(kcache.MetaNamespaceKeyFunc, kcache.Indexers{

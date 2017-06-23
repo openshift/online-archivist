@@ -6,12 +6,12 @@ import (
 	"github.com/openshift/online/archivist/pkg/clustermonitor"
 	"github.com/openshift/online/archivist/pkg/config"
 
-	buildclient "github.com/openshift/origin/pkg/build/client/clientset_generated/internalclientset/typed/core/internalversion"
+	buildclient "github.com/openshift/origin/pkg/build/generated/clientset"
 	osclient "github.com/openshift/origin/pkg/client"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
 
+	restclient "k8s.io/client-go/rest"
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
-	"k8s.io/kubernetes/pkg/client/restclient"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -35,7 +35,7 @@ var clusterMonitorCmd = &cobra.Command{
 			log.Panicf("error creating OpenShift/Kubernetes clients: %s", err)
 		}
 
-		var bc buildclient.CoreInterface
+		var bc buildclient.Interface
 		bc, err = buildclient.NewForConfig(clientConfig)
 		if err != nil {
 			log.Panicf("Error creating OpenShift client: %s", err)
