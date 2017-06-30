@@ -16,6 +16,7 @@ import (
 	ktestclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
 
 	"fmt"
+
 	log "github.com/Sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 )

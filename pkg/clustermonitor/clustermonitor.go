@@ -18,7 +18,6 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
 	kcache "k8s.io/client-go/tools/cache"
 	kapi "k8s.io/kubernetes/pkg/api"
@@ -107,6 +106,7 @@ func NewClusterMonitor(archivistConfig config.ArchivistConfig, clusterConfig con
 
 // ClusterMonitor monitors the state of the cluster and if necessary, evaluates namespace last activity to
 // determine which namespaces should be archived.
+// field of type StringSet (returned by sets.NewString) populate that in clustermonitor structor based on config.ProtectedNamespaces
 type ClusterMonitor struct {
 	cfg          config.ArchivistConfig
 	clusterCfg   config.ClusterConfig
@@ -131,14 +131,25 @@ func (a *ClusterMonitor) Run(stopChan <-chan struct{}) {
 	go a.nsInformer.Run(a.stopChannel)
 
 	// TODO: configurable duration
-	go wait.Until(a.checkCapacity, 5*time.Minute, a.stopChannel)
+	// go wait.Until(a.checkCapacity, 5*time.Minute, a.stopChannel)
 
-	// Rather than wait a complete interval, give the informers some time to receive lists of API objects, then
-	// do a capacity check:
-	time.Sleep(500 * time.Millisecond)
+	log.Infoln("Begin waiting for informers to sync")
+	syncTimer := time.NewTimer(time.Minute * 5)
+	go func() {
+		<-syncTimer.C
+		log.Fatal("Informers have not synced. Timeout at 5 minutes.")
+	}()
+	for {
+		// use hassynced method to check build, rc, and ns informers status
+		if a.buildInformer.HasSynced() == true && a.rcInformer.HasSynced() == true && a.nsInformer.HasSynced() == true {
+			log.Infoln("Informers have all synced, timer has stopped, continuing")
+			syncTimer.Stop()
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	go a.checkCapacity()
-
-	log.Infoln("clustermonitor is running")
+	// log.Infoln("clustermonitor is running")
 }
 
 // checkCapacity checks the capacity by all configured metrics and determines what (if any) namespaces need to
@@ -302,6 +313,7 @@ func (a *ClusterMonitor) GetLastActivity(namespace string) (time.Time, error) {
 
 func stringInSlice(a string, list []string) bool {
 	for _, b := range list {
+
 		if b == a {
 			return true
 		}
@@ -316,6 +328,8 @@ func (a *ClusterMonitor) getLastActivity(namespace string) (time.Time, error) {
 	})
 
 	// Not necessarily a problem here, but worth warning about:
+	// set lookup using structs as a key in a map
+	// set from slice -> sets package (sets.NewString)
 	if stringInSlice(namespace, a.clusterCfg.ProtectedNamespaces) {
 		nsLog.Warnln("called getLastActivity for protected namespace")
 	}
@@ -372,6 +386,19 @@ func (a *ClusterMonitor) getLastActivity(namespace string) (time.Time, error) {
 				"name":         r.Name,
 			}).Debugln("updating last activity time")
 		}
+	}
+
+	if lastActivity.IsZero() {
+		currentNamespace, err := a.kc.Core().Namespaces().Get(namespace, metav1.GetOptions{})
+		if err != nil {
+			return time.Time{}, err
+		}
+		lastActivity = currentNamespace.ObjectMeta.CreationTimestamp.Time
+		nsLog.WithFields(log.Fields{
+			"lastActivity": lastActivity,
+			"kind":         "NoReplicationControllerAndBuild",
+			"namespace":    namespace,
+		}).Infoln("No builds or RCs for current Namespace. Using project creation time for archival.")
 	}
 
 	nsLog.WithFields(log.Fields{"lastActivity": lastActivity}).Debugln("calculated last activity")
