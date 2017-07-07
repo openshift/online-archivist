@@ -6,7 +6,6 @@ import (
 	"github.com/openshift/online/archivist/pkg/clustermonitor"
 	"github.com/openshift/online/archivist/pkg/config"
 
-	buildclient "github.com/openshift/origin/pkg/build/generated/clientset"
 	osclient "github.com/openshift/origin/pkg/client"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
 
@@ -30,21 +29,15 @@ var clusterMonitorCmd = &cobra.Command{
 		log.SetOutput(os.Stdout)
 		archivistCfg := loadConfig(cfgFile)
 
-		clientConfig, _, oc, kc, err := createClients()
+		_, _, oc, kc, err := createClients()
 
 		if err != nil {
 			log.Panicf("error creating OpenShift/Kubernetes clients: %s", err)
 		}
 
-		var bc buildclient.Interface
-		bc, err = buildclient.NewForConfig(clientConfig)
-		if err != nil {
-			log.Panicf("Error creating OpenShift client: %s", err)
-		}
-
 		stopChan := make(chan struct{})
 
-		activityMonitor := clustermonitor.NewClusterMonitor(archivistCfg, archivistCfg.Clusters[0], oc, kc, bc)
+		activityMonitor := clustermonitor.NewClusterMonitor(archivistCfg, archivistCfg.Clusters[0], oc, kc)
 		activityMonitor.Run(stopChan)
 
 		log.Infoln("cluster monitor running")

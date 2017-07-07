@@ -4,12 +4,15 @@ import (
 	"fmt"
 	"os"
 
+	authclientset "github.com/openshift/origin/pkg/authorization/generated/clientset"
 	osclient "github.com/openshift/origin/pkg/client"
 	"github.com/openshift/origin/pkg/cmd/admin/policy"
 	"github.com/openshift/origin/pkg/cmd/server/bootstrappolicy"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
 	projectapi "github.com/openshift/origin/pkg/project/apis/project"
+	projectclientset "github.com/openshift/origin/pkg/project/generated/clientset"
 	userapi "github.com/openshift/origin/pkg/user/apis/user"
+	userclientset "github.com/openshift/origin/pkg/user/generated/clientset"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -22,26 +25,40 @@ import (
 	log "github.com/Sirupsen/logrus"
 )
 
+// Archiver allows for a variety of export, import, archive and unarchive operations. One archiver
+// should be created per operation as they are bound to a particular namespace and carry state.
 type Archiver struct {
-	users                osclient.UserInterface
-	identities           osclient.IdentityInterface
-	userIdentityMappings osclient.UserIdentityMappingInterface
-	projects             osclient.ProjectInterface
-	oc                   osclient.Interface
-	kc                   kclientset.Interface
-	f                    *clientcmd.Factory
-	mapper               meta.RESTMapper
-	typer                runtime.ObjectTyper
-	userObjects          []runtime.Object
-	projectObjects       []runtime.Object
-	namespace            string
-	log                  *log.Entry
-	username             string
+	projectClient projectclientset.Interface
+	authClient    authclientset.Interface
+	userClient    userclientset.Interface
+
+	// TODO: Legacy client usage here until we find their equivalent in new generated clientsets:
+	uidMapClient osclient.UserIdentityMappingInterface
+	idsClient    osclient.IdentityInterface
+
+	oc             osclient.Interface
+	kc             kclientset.Interface
+	f              *clientcmd.Factory
+	mapper         meta.RESTMapper
+	typer          runtime.ObjectTyper
+	userObjects    []runtime.Object
+	projectObjects []runtime.Object
+	namespace      string
+	log            *log.Entry
+	username       string
 }
 
-func NewArchiver(users osclient.UserInterface, projects osclient.ProjectInterface,
-	identities osclient.IdentityInterface, userIdentityMappings osclient.UserIdentityMappingInterface,
-	f *clientcmd.Factory, oc osclient.Interface, kc kclientset.Interface, namespace string, username string) *Archiver {
+func NewArchiver(
+	projectClient projectclientset.Interface,
+	authClient authclientset.Interface,
+	userClient userclientset.Interface,
+	uidMapClient osclient.UserIdentityMappingInterface,
+	idsClient osclient.IdentityInterface,
+	f *clientcmd.Factory,
+	oc osclient.Interface,
+	kc kclientset.Interface,
+	namespace string,
+	username string) *Archiver {
 
 	aLog := log.WithFields(log.Fields{
 		"namespace": namespace,
@@ -49,33 +66,37 @@ func NewArchiver(users osclient.UserInterface, projects osclient.ProjectInterfac
 	})
 	mapper, typer := f.Object()
 	return &Archiver{
-		users:                users,
-		projects:             projects,
-		identities:           identities,
-		userIdentityMappings: userIdentityMappings,
-		oc:                   oc,
-		kc:                   kc,
-		userObjects:          []runtime.Object{},
-		projectObjects:       []runtime.Object{},
-		f:                    f,
-		mapper:               mapper,
-		typer:                typer,
-		namespace:            namespace,
-		log:                  aLog,
-		username:             username,
+		projectClient: projectClient,
+		authClient:    authClient,
+		userClient:    userClient,
+
+		uidMapClient: uidMapClient,
+		idsClient:    idsClient,
+
+		oc:        oc,
+		kc:        kc,
+		f:         f,
+		namespace: namespace,
+		username:  username,
+
+		userObjects:    []runtime.Object{},
+		projectObjects: []runtime.Object{},
+		mapper:         mapper,
+		typer:          typer,
+		log:            aLog,
 	}
 }
 
-// Export projects where user is admin to a single .yaml file and delete those projects
-func (a *Archiver) Archive() error {
+// Export generates and returns a list of API objects for the project.
+func (a *Archiver) Export() (*kapi.List, error) {
+	a.log.Info("exporting project")
 
-	a.log.Info("beginning archival")
 	projectName := a.namespace
 
-	project, err := a.projects.Get(projectName, metav1.GetOptions{})
+	project, err := a.projectClient.ProjectV1().Projects().Get(projectName, metav1.GetOptions{})
 	if err != nil {
 		a.log.Errorln("unable to lookup project", err)
-		return err
+		return nil, err
 	}
 	a.log.Info("got project", project)
 
@@ -84,13 +105,12 @@ func (a *Archiver) Archive() error {
 
 	// Find user's role binding for this project and archive it:
 	a.log.Debugln("checking role bindings")
-	rbs, err := a.oc.RoleBindings(a.namespace).List(metav1.ListOptions{})
+	rbs, err := a.authClient.AuthorizationV1().RoleBindings(a.namespace).List(metav1.ListOptions{})
 	if err != nil {
 		a.log.Errorln("unable to list role bindings")
-		return err
+		return nil, err
 	}
 	a.log.Debugf("found %d role bindings", len(rbs.Items))
-
 	for _, rb := range rbs.Items {
 		a.log.Debug("checking role binding:", rb.RoleRef.Name)
 		// We're looking specifically for the admin role:
@@ -101,14 +121,16 @@ func (a *Archiver) Archive() error {
 					resourceName := fmt.Sprintf("rolebindings/%s", rb.ObjectMeta.Name)
 					err := a.archive(resourceName, a.namespace)
 					if err != nil {
-						return err
+						return nil, err
 					}
 				}
 			}
 		}
 	}
 
-	// Get all resources for this project and archive them
+	// Get all resources for this project and archive them. Using this kubectl resource infra
+	// allows us to list all objects generically, instead of hard coding a lookup for each API type
+	// and then having to constantly keep that up to date as more types are added.
 	a.log.Debugln("listing all project resources")
 	r := resource.NewBuilder(a.mapper, a.typer, resource.ClientMapperFunc(a.f.ClientForMapping),
 		kapi.Codecs.UniversalDecoder()).
@@ -132,18 +154,18 @@ func (a *Archiver) Archive() error {
 		return nil
 	})
 
-	a.log.Debugln("archiving user identity")
+	a.log.Debugln("adding user identity")
 	// Archive the user, along with their identity and identitymapping
 	a.archiveUserIdentity(a.username, projectName)
 
 	// Must delete project last, but have it be the first item in the
 	// List template, so that it will be created first during unarchival
-	a.log.Debugln("archiving project")
+	a.log.Debugln("adding project")
 	projectResourceName := fmt.Sprintf("project/%s", projectName)
 	err = a.archive(projectResourceName, projectName)
 	if err != nil {
 		a.log.Error("error archiving project")
-		return err
+		return nil, err
 	}
 
 	a.log.Debugln("creating template")
@@ -159,21 +181,39 @@ func (a *Archiver) Archive() error {
 	outputVersion := *clientConfig.GroupVersion
 	result, err = kapi.Scheme.ConvertToVersion(template, outputVersion)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
+	// TODO: kill this writing to yaml file
 	if err := a.exportTemplate(result); err != nil {
+		return nil, err
+	}
+	a.log.Infoln("export generated successfully")
+
+	return template, nil
+}
+
+// Archive exports a template of the project and associated user metadata, handles snapshots of
+// persistent volumes, and then deletes those objects from the cluster.
+func (a *Archiver) Archive() error {
+
+	a.log.Info("beginning archival")
+
+	_, err := a.Export()
+	if err != nil {
 		return err
 	}
 
 	// TODO: make this optional, may just be looking to backup?
-	a.projects.Delete(projectName)
+	a.projectClient.ProjectV1().Projects().Delete(a.namespace, &metav1.DeleteOptions{})
 
 	return nil
 }
 
-// archiveProject creates a yaml template of a project and deletes the project from openshift
+// archiveProject adds the given object to the correct array for eventual addition to the template.
 func (a *Archiver) archive(name, namespace string) error {
+	// TODO: for most cases, this looks like a double instance of using the builder/info lookup,
+	// as we already did this for normal objects in the project:
 	a.log.WithFields(log.Fields{"name": name}).Infoln("archiving object")
 	b := resource.NewBuilder(a.mapper, a.typer, resource.ClientMapperFunc(a.f.ClientForMapping),
 		kapi.Codecs.UniversalDecoder()).
@@ -237,19 +277,22 @@ func (a *Archiver) archiveUserIdentity(username, namespace string) error {
 
 	// Delete mapping, then delete identity so the identity isn't referenced in the archived user resource
 	// Otherwise the user won't get bound to the newly-created identity when unarchived
-	a.userIdentityMappings.Delete(identityName)
+	// TODO: there is no longer a user identity mapping client, but this may not be needed at all in the end
+	a.uidMapClient.Delete(identityName)
 
 	err := a.archive(identityResourceName, "")
 	if err != nil {
 		return err
 	}
-	a.identities.Delete(identityName)
+	a.idsClient.Delete(identityName)
 
 	err = a.archive(userResourceName, "")
 	if err != nil {
 		return err
 	}
-	a.users.Delete(username)
+
+	// TODO: watchout for listing users in namespace here.
+	a.userClient.UserV1().Users(a.namespace).Delete(username, &metav1.DeleteOptions{})
 	return nil
 }
 
@@ -307,8 +350,9 @@ func (a *Archiver) Unarchive() error {
 			// Add default service account role bindings to newly-created project
 			for _, binding := range bootstrappolicy.GetBootstrapServiceAccountProjectRoleBindings(a.namespace) {
 				addRole := &policy.RoleModificationOptions{
-					RoleName:            binding.RoleRef.Name,
-					RoleNamespace:       binding.RoleRef.Namespace,
+					RoleName:      binding.RoleRef.Name,
+					RoleNamespace: binding.RoleRef.Namespace,
+					// TODO: try to eliminate oc use here, it's the last one.
 					RoleBindingAccessor: policy.NewLocalRoleBindingAccessor(a.namespace, a.oc),
 					Subjects:            binding.Subjects,
 				}
@@ -328,7 +372,7 @@ func (a *Archiver) Unarchive() error {
 				return err
 			}
 			info.Refresh(obj, true)
-			_, err = a.userIdentityMappings.Create(&userapi.UserIdentityMapping{
+			_, err = a.uidMapClient.Create(&userapi.UserIdentityMapping{
 				User:     kapi.ObjectReference{Name: a.username},
 				Identity: kapi.ObjectReference{Name: "anypassword:" + a.username},
 			})

@@ -7,7 +7,6 @@ import (
 	"github.com/openshift/online/archivist/pkg/config"
 
 	buildapi "github.com/openshift/origin/pkg/build/apis/build"
-	fakebuildclient "github.com/openshift/origin/pkg/build/generated/clientset/fake"
 	otestclient "github.com/openshift/origin/pkg/client/testclient"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -192,11 +191,10 @@ func TestNamespaceLastActivity(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			oc := &otestclient.Fake{}
-			bc := &fakebuildclient.Clientset{}
 			kc := &ktestclient.Clientset{}
 
 			aConfig := config.NewDefaultArchivistConfig()
-			cm := NewClusterMonitor(aConfig, aConfig.Clusters[0], oc, kc, bc)
+			cm := NewClusterMonitor(aConfig, aConfig.Clusters[0], oc, kc)
 
 			// Building our indexers to bypass the Informer framework, which is more
 			// complicated to test and looks to involve sleeping until the informer
@@ -335,7 +333,6 @@ func TestGetNamespacesToArchive(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			oc := &otestclient.Fake{}
-			bc := &fakebuildclient.Clientset{}
 			kc := &ktestclient.Clientset{}
 
 			aConfig := config.NewDefaultArchivistConfig()
@@ -344,7 +341,7 @@ func TestGetNamespacesToArchive(t *testing.T) {
 			aConfig.Clusters[0].MaxInactiveDays = tc.maxInactiveDays
 			aConfig.Clusters[0].MinInactiveDays = tc.minInactiveDays
 
-			cm := NewClusterMonitor(aConfig, aConfig.Clusters[0], oc, kc, bc)
+			cm := NewClusterMonitor(aConfig, aConfig.Clusters[0], oc, kc)
 
 			cm.nsIndexer = kcache.NewIndexer(kcache.MetaNamespaceKeyFunc, kcache.Indexers{})
 			cm.rcIndexer = kcache.NewIndexer(kcache.MetaNamespaceKeyFunc, kcache.Indexers{

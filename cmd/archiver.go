@@ -5,6 +5,9 @@ import (
 	"os"
 
 	"github.com/openshift/online/archivist/pkg/api"
+	authclientset "github.com/openshift/origin/pkg/authorization/generated/clientset"
+	projectclientset "github.com/openshift/origin/pkg/project/generated/clientset"
+	userclientset "github.com/openshift/origin/pkg/user/generated/clientset"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/gorilla/mux"
@@ -23,12 +26,28 @@ var archiverCmd = &cobra.Command{
 		log.SetOutput(os.Stdout)
 		loadConfig(cfgFile)
 
-		_, factory, oc, kc, err := createClients()
+		restConfig, factory, oc, kc, err := createClients()
 		if err != nil {
 			log.Panicf("error creating OpenShift/Kubernetes clients: %s", err)
 		}
 
-		th := api.NewTransferHandler(factory, oc, kc)
+		projectClient, err := projectclientset.NewForConfig(restConfig)
+		if err != nil {
+			log.Panicf("error creating project client")
+		}
+
+		authClient, err := authclientset.NewForConfig(restConfig)
+		if err != nil {
+			log.Panicf("error creating auth client")
+		}
+
+		userClient, err := userclientset.NewForConfig(restConfig)
+		if err != nil {
+			log.Panicf("error creating user client")
+		}
+
+		th := api.NewTransferHandler(projectClient, authClient, userClient,
+			oc.UserIdentityMappings(), oc.Identities(), factory, oc, kc)
 
 		router := mux.NewRouter().StrictSlash(true)
 		router.HandleFunc("/api/transfer", th.Handle)

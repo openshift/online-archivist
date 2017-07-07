@@ -10,7 +10,6 @@ import (
 	oclient "github.com/openshift/origin/pkg/client"
 
 	buildapi "github.com/openshift/origin/pkg/build/apis/build"
-	buildclient "github.com/openshift/origin/pkg/build/generated/clientset"
 
 	// Prevents "no kind registered for version" even with generated clientset use
 	// TODO: This shouldn't be required, may not be doing something correctly.
@@ -29,8 +28,7 @@ import (
 const logComponent = "clustermonitor"
 
 func NewClusterMonitor(archivistConfig config.ArchivistConfig, clusterConfig config.ClusterConfig,
-	oc oclient.Interface, kc kclientset.Interface,
-	bc buildclient.Interface) *ClusterMonitor {
+	oc oclient.Interface, kc kclientset.Interface) *ClusterMonitor {
 
 	buildLW := &kcache.ListWatch{
 		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
@@ -93,7 +91,6 @@ func NewClusterMonitor(archivistConfig config.ArchivistConfig, clusterConfig con
 		clusterCfg:    clusterConfig,
 		oc:            oc,
 		kc:            kc,
-		bc:            bc,
 		buildInformer: buildInformer,
 		rcInformer:    rcInformer,
 		nsInformer:    nsInformer,
@@ -112,7 +109,6 @@ type ClusterMonitor struct {
 	clusterCfg   config.ClusterConfig
 	oc           oclient.Interface // TODO: not used
 	kc           kclientset.Interface
-	bc           buildclient.Interface
 	stopChannel  <-chan struct{}
 	buildIndexer kcache.Indexer
 	rcIndexer    kcache.Indexer

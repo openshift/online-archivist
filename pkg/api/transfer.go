@@ -8,8 +8,11 @@ import (
 	"github.com/openshift/online/archivist/pkg/archive"
 	"github.com/openshift/online/archivist/pkg/model"
 
+	authclientset "github.com/openshift/origin/pkg/authorization/generated/clientset"
 	osclient "github.com/openshift/origin/pkg/client"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
+	projectclientset "github.com/openshift/origin/pkg/project/generated/clientset"
+	userclientset "github.com/openshift/origin/pkg/user/generated/clientset"
 
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 
@@ -18,16 +21,36 @@ import (
 
 // TransferHandler is a struct carrying objects we need to use to process each API request.
 type TransferHandler struct {
+	projectClient projectclientset.Interface
+	authClient    authclientset.Interface
+	userClient    userclientset.Interface
+	uidMapClient  osclient.UserIdentityMappingInterface
+	idsClient     osclient.IdentityInterface
+
 	oc osclient.Interface
 	kc kclientset.Interface
 	f  *clientcmd.Factory
 }
 
-func NewTransferHandler(factory *clientcmd.Factory, oc osclient.Interface, kc kclientset.Interface) TransferHandler {
+func NewTransferHandler(
+	projectClient projectclientset.Interface,
+	authClient authclientset.Interface,
+	userClient userclientset.Interface,
+	uidMapClient osclient.UserIdentityMappingInterface,
+	idsClient osclient.IdentityInterface,
+	factory *clientcmd.Factory,
+	oc osclient.Interface,
+	kc kclientset.Interface) TransferHandler {
+
 	return TransferHandler{
-		oc: oc,
-		kc: kc,
-		f:  factory,
+		projectClient: projectClient,
+		authClient:    authClient,
+		userClient:    userClient,
+		uidMapClient:  uidMapClient,
+		idsClient:     idsClient,
+		oc:            oc,
+		kc:            kc,
+		f:             factory,
 	}
 }
 
@@ -64,10 +87,11 @@ func (th TransferHandler) initiateTransfer(r *http.Request) (httpStatus int, err
 
 	if t.Source.Cluster != nil {
 		archiver := archive.NewArchiver(
-			th.oc.Users(),
-			th.oc.Projects(),
-			th.oc.Identities(),
-			th.oc.UserIdentityMappings(),
+			th.projectClient,
+			th.authClient,
+			th.userClient,
+			th.uidMapClient,
+			th.idsClient,
 			th.f,
 			th.oc,
 			th.kc,
@@ -82,10 +106,11 @@ func (th TransferHandler) initiateTransfer(r *http.Request) (httpStatus int, err
 
 	if t.Dest.Cluster != nil {
 		archiver := archive.NewArchiver(
-			th.oc.Users(),
-			th.oc.Projects(),
-			th.oc.Identities(),
-			th.oc.UserIdentityMappings(),
+			th.projectClient,
+			th.authClient,
+			th.userClient,
+			th.uidMapClient,
+			th.idsClient,
 			th.f,
 			th.oc,
 			th.kc,
