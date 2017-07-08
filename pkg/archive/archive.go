@@ -28,13 +28,14 @@ import (
 // Archiver allows for a variety of export, import, archive and unarchive operations. One archiver
 // should be created per operation as they are bound to a particular namespace and carry state.
 type Archiver struct {
-	projectClient projectclientset.Interface
-	authClient    authclientset.Interface
-	userClient    userclientset.Interface
+	// TODO: Should these use the v1 clients so we don't have to constantly chain method calls to V1?
+	pc projectclientset.Interface
+	ac authclientset.Interface
+	uc userclientset.Interface
 
 	// TODO: Legacy client usage here until we find their equivalent in new generated clientsets:
-	uidMapClient osclient.UserIdentityMappingInterface
-	idsClient    osclient.IdentityInterface
+	uidmc osclient.UserIdentityMappingInterface
+	idc   osclient.IdentityInterface
 
 	oc             osclient.Interface
 	kc             kclientset.Interface
@@ -66,12 +67,12 @@ func NewArchiver(
 	})
 	mapper, typer := f.Object()
 	return &Archiver{
-		projectClient: projectClient,
-		authClient:    authClient,
-		userClient:    userClient,
+		pc: projectClient,
+		ac: authClient,
+		uc: userClient,
 
-		uidMapClient: uidMapClient,
-		idsClient:    idsClient,
+		uidmc: uidMapClient,
+		idc:   idsClient,
 
 		oc:        oc,
 		kc:        kc,
@@ -93,7 +94,7 @@ func (a *Archiver) Export() (*kapi.List, error) {
 
 	projectName := a.namespace
 
-	project, err := a.projectClient.ProjectV1().Projects().Get(projectName, metav1.GetOptions{})
+	project, err := a.pc.ProjectV1().Projects().Get(projectName, metav1.GetOptions{})
 	if err != nil {
 		a.log.Errorln("unable to lookup project", err)
 		return nil, err
@@ -105,7 +106,7 @@ func (a *Archiver) Export() (*kapi.List, error) {
 
 	// Find user's role binding for this project and archive it:
 	a.log.Debugln("checking role bindings")
-	rbs, err := a.authClient.AuthorizationV1().RoleBindings(a.namespace).List(metav1.ListOptions{})
+	rbs, err := a.ac.AuthorizationV1().RoleBindings(a.namespace).List(metav1.ListOptions{})
 	if err != nil {
 		a.log.Errorln("unable to list role bindings")
 		return nil, err
@@ -205,12 +206,12 @@ func (a *Archiver) Archive() error {
 	}
 
 	// TODO: make this optional, may just be looking to backup?
-	a.projectClient.ProjectV1().Projects().Delete(a.namespace, &metav1.DeleteOptions{})
+	a.pc.ProjectV1().Projects().Delete(a.namespace, &metav1.DeleteOptions{})
 
 	return nil
 }
 
-// archiveProject adds the given object to the correct array for eventual addition to the template.
+// archive adds the given object to the correct array for eventual addition to the template.
 func (a *Archiver) archive(name, namespace string) error {
 	// TODO: for most cases, this looks like a double instance of using the builder/info lookup,
 	// as we already did this for normal objects in the project:
@@ -278,13 +279,13 @@ func (a *Archiver) archiveUserIdentity(username, namespace string) error {
 	// Delete mapping, then delete identity so the identity isn't referenced in the archived user resource
 	// Otherwise the user won't get bound to the newly-created identity when unarchived
 	// TODO: there is no longer a user identity mapping client, but this may not be needed at all in the end
-	a.uidMapClient.Delete(identityName)
+	a.uidmc.Delete(identityName)
 
 	err := a.archive(identityResourceName, "")
 	if err != nil {
 		return err
 	}
-	a.idsClient.Delete(identityName)
+	a.idc.Delete(identityName)
 
 	err = a.archive(userResourceName, "")
 	if err != nil {
@@ -292,7 +293,7 @@ func (a *Archiver) archiveUserIdentity(username, namespace string) error {
 	}
 
 	// TODO: watchout for listing users in namespace here.
-	a.userClient.UserV1().Users(a.namespace).Delete(username, &metav1.DeleteOptions{})
+	a.uc.UserV1().Users(a.namespace).Delete(username, &metav1.DeleteOptions{})
 	return nil
 }
 
@@ -372,7 +373,7 @@ func (a *Archiver) Unarchive() error {
 				return err
 			}
 			info.Refresh(obj, true)
-			_, err = a.uidMapClient.Create(&userapi.UserIdentityMapping{
+			_, err = a.uidmc.Create(&userapi.UserIdentityMapping{
 				User:     kapi.ObjectReference{Name: a.username},
 				Identity: kapi.ObjectReference{Name: "anypassword:" + a.username},
 			})

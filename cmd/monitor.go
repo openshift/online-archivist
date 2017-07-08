@@ -11,6 +11,7 @@ import (
 
 	restclient "k8s.io/client-go/rest"
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+	kclientcmd "k8s.io/client-go/tools/clientcmd"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -48,12 +49,18 @@ var clusterMonitorCmd = &cobra.Command{
 }
 
 func createClients() (*restclient.Config, *clientcmd.Factory, osclient.Interface, kclientset.Interface, error) {
-	// TODO: multi cluster connections
-	// TODO: make use of for real deployments
-	// conf, err := restclient.InClusterConfig()
 	dcc := clientcmd.DefaultClientConfig(pflag.NewFlagSet("empty", pflag.ContinueOnError))
-	//clientFac := clientcmd.NewFactory(dcc)
-	clientFac := clientcmd.New(pflag.NewFlagSet("empty", pflag.ContinueOnError))
+	return CreateClientsForConfig(dcc)
+}
+
+// CreateClientsForConfig creates and returns OpenShift and Kubernetes clients (as well as other useful
+// client objects) for the given client config.
+func CreateClientsForConfig(dcc kclientcmd.ClientConfig) (*restclient.Config, *clientcmd.Factory, osclient.Interface, kclientset.Interface, error) {
+
+	rawConfig, err := dcc.RawConfig()
+	log.Infoln("current kubeconfig context", rawConfig.CurrentContext)
+
+	clientFac := clientcmd.NewFactory(dcc)
 
 	clientConfig, err := dcc.ClientConfig()
 	if err != nil {
@@ -62,11 +69,9 @@ func createClients() (*restclient.Config, *clientcmd.Factory, osclient.Interface
 
 	log.WithFields(log.Fields{
 		"APIPath":  clientConfig.APIPath,
-		"CertFile": clientConfig.CertFile,
-		"KeyFile":  clientConfig.KeyFile,
-		"CAFile":   clientConfig.CAFile,
 		"Host":     clientConfig.Host,
 		"Username": clientConfig.Username,
+		"BearerToken": clientConfig.BearerToken,
 	}).Infoln("Created OpenShift client clientConfig:")
 
 	oc, kc, err := clientFac.Clients()

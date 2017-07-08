@@ -47,3 +47,17 @@ Redeploy archivist with:
 ```
 $ ansible-playbook -i hosts archivist.yml
 ```
+
+## Integration Test Suite
+
+The integration test suite currently assumes some kind of local test cluster, presumably oc cluster up, or
+minishift. You must be logged in as "system:admin" with your local kubeconfig/oc client tooling, otherwise
+the tests will immediately error out informing you why.
+
+```
+oc cluster up
+oc login system:admin
+make test-integration
+```
+
+These tests will create objects in the local test cluster, and generally should clean up after themselves.
