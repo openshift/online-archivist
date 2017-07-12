@@ -126,26 +126,37 @@ func (a *ClusterMonitor) Run(stopChan <-chan struct{}) {
 	go a.rcInformer.Run(a.stopChannel)
 	go a.nsInformer.Run(a.stopChannel)
 
-	// TODO: configurable duration
-	// go wait.Until(a.checkCapacity, 5*time.Minute, a.stopChannel)
-
-	log.Infoln("Begin waiting for informers to sync")
+	log.Infoln("begin waiting for informers to sync")
 	syncTimer := time.NewTimer(time.Minute * 5)
 	go func() {
 		<-syncTimer.C
-		log.Fatal("Informers have not synced. Timeout at 5 minutes.")
+		log.Fatal("informers have not synced, timeout at 5 minutes.")
 	}()
 	for {
 		// use hassynced method to check build, rc, and ns informers status
 		if a.buildInformer.HasSynced() == true && a.rcInformer.HasSynced() == true && a.nsInformer.HasSynced() == true {
-			log.Infoln("Informers have all synced, timer has stopped, continuing")
+			log.Infoln("informers have all synced, timer has stopped, continuing")
 			syncTimer.Stop()
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	go a.checkCapacity()
-	// log.Infoln("clustermonitor is running")
+
+	// ticker for MonitorCheckInterval
+	duration := a.cfg.MonitorCheckInterval
+	tickerTime := time.Duration(duration)
+	ticker := time.NewTicker(tickerTime)
+
+	go func() {
+		for t := range ticker.C {
+			log.Info("Checking capacity at: ", t)
+			go a.checkCapacity()
+		}
+	}()
+	// Will run the ClusterMonitor at a input time interval
+	// currently, each will stop after 10 minutes for testing purposes but this can be easily changed below
+	time.Sleep(time.Minute * 10)
+	ticker.Stop()
 }
 
 // checkCapacity checks the capacity by all configured metrics and determines what (if any) namespaces need to
@@ -179,17 +190,15 @@ func (a *ClusterMonitor) getNamespacesToArchive(checkTime time.Time) ([]LastActi
 		capLog.Warnln("no namespace capacity low watermark defined, skipping")
 		return nil, nil
 	}
-	// TODO: max/min inactive must be defined? or catch in config validation
 
 	// Calculate the actual time for our activity range:
-	minInactive := checkTime.AddDate(0, 0, -a.clusterCfg.MinInactiveDays)
-	maxInactive := checkTime.AddDate(0, 0, -a.clusterCfg.MaxInactiveDays)
+	minInactive := checkTime.Add(time.Duration(-a.clusterCfg.MinInactiveDuration))
+	maxInactive := checkTime.Add(time.Duration(-a.clusterCfg.MaxInactiveDuration))
 
 	veryInactive := make([]LastActivity, 0, 20)     // will definitely be archived
 	somewhatInactive := make([]LastActivity, 0, 20) // may be archived if we need room
 
 	// Calculate last activity time for all namespaces and sort it:
-
 	namespaces := a.nsIndexer.List()
 	capLog.WithFields(log.Fields{
 		"checkTime":     checkTime,
@@ -275,10 +284,10 @@ func (a *ClusterMonitor) getNamespacesToArchive(checkTime time.Time) ([]LastActi
 	dryRun := a.cfg.DryRun
 	if dryRun == false {
 		// here we would set up anything else needed in order to take the project snapshot and move to S3 before moving into archival specifics?
-		capLog.Infoln("Actual archiving will occur.")
+		capLog.Infoln("actual archiving will occur.")
 
 	} else {
-		capLog.Infoln("Logging without actual archival will occur.")
+		capLog.Infoln("logging without actual archival will occur.")
 	}
 
 	newNSCount = len(namespaces) - len(namespacesToArchive)
@@ -394,7 +403,7 @@ func (a *ClusterMonitor) getLastActivity(namespace string) (time.Time, error) {
 			"lastActivity": lastActivity,
 			"kind":         "NoReplicationControllerAndBuild",
 			"namespace":    namespace,
-		}).Infoln("No builds or RCs for current Namespace. Using project creation time for archival.")
+		}).Infoln("no builds or RCs for current Namespace, using project creation time for archival")
 	}
 
 	nsLog.WithFields(log.Fields{"lastActivity": lastActivity}).Debugln("calculated last activity")
