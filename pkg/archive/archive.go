@@ -82,9 +82,10 @@ func NewArchiver(
 
 		userObjects:    []runtime.Object{},
 		projectObjects: []runtime.Object{},
-		mapper:         mapper,
-		typer:          typer,
-		log:            aLog,
+
+		mapper: mapper,
+		typer:  typer,
+		log:    aLog,
 	}
 }
 
@@ -155,6 +156,21 @@ func (a *Archiver) Export() (*kapi.List, error) {
 		return nil
 	})
 
+	// Secrets are not included by default when listing all resources. (via deads2k: hardcoded category alias, can't
+	// be changed) We must list them explicitly.
+	secrets, err := a.kc.Core().Secrets(projectName).List(metav1.ListOptions{})
+	a.log.Debugf("found %d secrets", len(secrets.Items))
+	for i := range secrets.Items {
+		// Need to use the index here as we must use the pointer to use as a runtime.Object:
+		s := secrets.Items[i]
+		// Skip certain secret types, we'll let service accounts and such be recreated on the import:
+		if s.Type == kapi.SecretTypeServiceAccountToken ||
+			s.Type == kapi.SecretTypeDockercfg {
+			continue
+		}
+		a.projectObjects = append(a.projectObjects, &s)
+	}
+
 	a.log.Debugln("adding user identity")
 	// Archive the user, along with their identity and identitymapping
 	a.archiveUserIdentity(a.username, projectName)
@@ -192,6 +208,16 @@ func (a *Archiver) Export() (*kapi.List, error) {
 	a.log.Infoln("export generated successfully")
 
 	return template, nil
+}
+
+// ObjKind uses the object typer to lookup the plain kind string for an object. (i.e. Project,
+// Secret, BuildConfig, etc)
+func (a *Archiver) ObjKind(o runtime.Object) string {
+	kinds, _, err := a.typer.ObjectKinds(o)
+	if err != nil {
+		a.log.Error("unable to lookup Kind for object:", err)
+	}
+	return kinds[0].Kind
 }
 
 // Archive exports a template of the project and associated user metadata, handles snapshots of

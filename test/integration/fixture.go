@@ -1,9 +1,7 @@
 package integration
 
 import (
-	"fmt"
 	"testing"
-	"time"
 	"strings"
 
 	"github.com/openshift/online/archivist/cmd"
@@ -15,13 +13,15 @@ import (
 	buildclientset "github.com/openshift/origin/pkg/build/generated/clientset"
 	userclientset "github.com/openshift/origin/pkg/user/generated/clientset"
 	deployclientset "github.com/openshift/origin/pkg/deploy/generated/clientset"
+	buildv1 "github.com/openshift/origin/pkg/build/apis/build/v1"
 
 	deployv1 "github.com/openshift/origin/pkg/deploy/apis/apps/v1"
 
 	restclient "k8s.io/client-go/rest"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
-	kapi "k8s.io/kubernetes/pkg/api/v1"
+	kapiv1 "k8s.io/kubernetes/pkg/api/v1"
+	kapi "k8s.io/kubernetes/pkg/api"
 
 	"github.com/spf13/pflag"
 )
@@ -41,10 +41,6 @@ type testHarness struct {
 	// TODO: Legacy client usage here until we find their equivalent in new generated clientsets:
 	uidmc osclient.UserIdentityMappingInterface
 	idc   osclient.IdentityInterface
-}
-
-func username() string {
-	return fmt.Sprintf("%s%d", "test", time.Now().UnixNano())
 }
 
 func newTestHarness(t *testing.T) *testHarness {
@@ -126,40 +122,59 @@ func dcStatus(version int64) deployv1.DeploymentConfigStatus {
 	}
 }
 
-func mkintp(i int) *int64 {
-	v := int64(i)
-	return &v
-}
-
-func podTemplateSpec() *kapi.PodTemplateSpec {
-	return &kapi.PodTemplateSpec{
-		Spec: kapi.PodSpec{
-			Containers: []kapi.Container{
+func podTemplateSpec() *kapiv1.PodTemplateSpec {
+	return &kapiv1.PodTemplateSpec{
+		Spec: kapiv1.PodSpec{
+			Containers: []kapiv1.Container{
 				{
 					Name:  "container1",
 					Image: "registry:8080/repo1:ref1",
-					Env: []kapi.EnvVar{
+					Env: []kapiv1.EnvVar{
 						{
 							Name:  "ENV1",
 							Value: "VAL1",
 						},
 					},
-					ImagePullPolicy:          kapi.PullIfNotPresent,
+					ImagePullPolicy:          kapiv1.PullIfNotPresent,
 					TerminationMessagePath:   "/dev/termination-log",
-					TerminationMessagePolicy: kapi.TerminationMessageReadFile,
+					TerminationMessagePolicy: kapiv1.TerminationMessageReadFile,
 				},
 				{
 					Name:                     "container2",
 					Image:                    "registry:8080/repo1:ref2",
-					ImagePullPolicy:          kapi.PullIfNotPresent,
+					ImagePullPolicy:          kapiv1.PullIfNotPresent,
 					TerminationMessagePath:   "/dev/termination-log",
-					TerminationMessagePolicy: kapi.TerminationMessageReadFile,
+					TerminationMessagePolicy: kapiv1.TerminationMessageReadFile,
 				},
 			},
-			RestartPolicy:                 kapi.RestartPolicyAlways,
+			RestartPolicy: kapiv1.RestartPolicyAlways,
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Labels: map[string]string{"a": "b"},
 		},
 	}
+}
+
+func secret(projectName string, name string) *kapi.Secret {
+	return &kapi.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: projectName,
+		},
+		Data: map[string][]byte{
+			"foo": []byte("foo"),
+			"bar": []byte("bar"),
+		},
+	}
+}
+
+func buildConfig(buildPrefix string) *buildv1.BuildConfig {
+	buildConfig := &buildv1.BuildConfig{}
+	buildConfig.Spec.RunPolicy = buildv1.BuildRunPolicyParallel
+	buildConfig.GenerateName = buildPrefix
+	buildStrategy := buildv1.BuildStrategy{}
+	buildStrategy.DockerStrategy = &buildv1.DockerBuildStrategy{}
+	buildConfig.Spec.Strategy = buildStrategy
+	buildConfig.Spec.Source.Git = &buildv1.GitBuildSource{URI: "example.org"}
+	return buildConfig
 }
