@@ -42,7 +42,6 @@ type Archiver struct {
 	f              *clientcmd.Factory
 	mapper         meta.RESTMapper
 	typer          runtime.ObjectTyper
-	userObjects    []runtime.Object
 	projectObjects []runtime.Object
 	namespace      string
 	log            *log.Entry
@@ -80,7 +79,6 @@ func NewArchiver(
 		namespace: namespace,
 		username:  username,
 
-		userObjects:    []runtime.Object{},
 		projectObjects: []runtime.Object{},
 
 		mapper: mapper,
@@ -101,34 +99,6 @@ func (a *Archiver) Export() (*kapi.List, error) {
 		return nil, err
 	}
 	a.log.Info("got project", project)
-
-	// Check if user is admin for current project, if so then archive
-	// and add project to exported template
-
-	// Find user's role binding for this project and archive it:
-	a.log.Debugln("checking role bindings")
-	rbs, err := a.ac.AuthorizationV1().RoleBindings(a.namespace).List(metav1.ListOptions{})
-	if err != nil {
-		a.log.Errorln("unable to list role bindings")
-		return nil, err
-	}
-	a.log.Debugf("found %d role bindings", len(rbs.Items))
-	for _, rb := range rbs.Items {
-		a.log.Debug("checking role binding:", rb.RoleRef.Name)
-		// We're looking specifically for the admin role:
-		if rb.RoleRef.Name == "admin" {
-			for _, user := range rb.Subjects {
-				a.log.Debug("checking subject:", user.Name)
-				if user.Name == a.username {
-					resourceName := fmt.Sprintf("rolebindings/%s", rb.ObjectMeta.Name)
-					err := a.archive(resourceName, a.namespace)
-					if err != nil {
-						return nil, err
-					}
-				}
-			}
-		}
-	}
 
 	// Get all resources for this project and archive them. Using this kubectl resource infra
 	// allows us to list all objects generically, instead of hard coding a lookup for each API type
@@ -171,25 +141,11 @@ func (a *Archiver) Export() (*kapi.List, error) {
 		a.projectObjects = append(a.projectObjects, &s)
 	}
 
-	a.log.Debugln("adding user identity")
-	// Archive the user, along with their identity and identitymapping
-	a.archiveUserIdentity(a.username, projectName)
-
-	// Must delete project last, but have it be the first item in the
-	// List template, so that it will be created first during unarchival
-	a.log.Debugln("adding project")
-	projectResourceName := fmt.Sprintf("project/%s", projectName)
-	err = a.archive(projectResourceName, projectName)
-	if err != nil {
-		a.log.Error("error archiving project")
-		return nil, err
-	}
-
 	a.log.Debugln("creating template")
 	// Make exported "template", which is really just a List of resources
 	template := &kapi.List{
 		ListMeta: metav1.ListMeta{},
-		Items:    append(a.projectObjects, a.userObjects...),
+		Items:    a.projectObjects,
 	}
 
 	// This may be redundant config stuff, but version template list
@@ -231,7 +187,9 @@ func (a *Archiver) Archive() error {
 		return err
 	}
 
-	// TODO: make this optional, may just be looking to backup?
+	// Finally delete the project. Note that this may take some time but the project
+	// should be marked as in Terminating status much more quickly. This will cleanup
+	// most objects we're concerned about.
 	a.pc.ProjectV1().Projects().Delete(a.namespace, &metav1.DeleteOptions{})
 
 	return nil
@@ -271,14 +229,6 @@ func (a *Archiver) archive(name, namespace string) error {
 		}
 
 		switch info.ResourceMapping().Resource {
-		case "users", "identities", "useridentitymappings":
-			for _, object := range objects {
-				a.userObjects = append(a.userObjects, object)
-			}
-		case "projects":
-			for _, object := range objects {
-				a.projectObjects = append([]runtime.Object{object}, a.projectObjects...)
-			}
 		default:
 			for _, object := range objects {
 				a.projectObjects = append(a.projectObjects, object)
@@ -288,39 +238,6 @@ func (a *Archiver) archive(name, namespace string) error {
 		return nil
 	})
 	return err
-}
-
-// Archives the user identity resources (user, identity) and deletes the
-// user identity mapping. These need to be archived and deleted in a specific order
-// Should we bother this? Why not recreate new in the new cluster and just restore objects the user
-// is genuinely interested in.
-func (a *Archiver) archiveUserIdentity(username, namespace string) error {
-	// TODO: watchout for this
-	identityProvider := "anypassword"
-	identityName := identityProvider + ":" + username
-
-	identityResourceName := fmt.Sprintf("identities/%s", identityName)
-	userResourceName := fmt.Sprintf("users/%s", username)
-
-	// Delete mapping, then delete identity so the identity isn't referenced in the archived user resource
-	// Otherwise the user won't get bound to the newly-created identity when unarchived
-	// TODO: there is no longer a user identity mapping client, but this may not be needed at all in the end
-	a.uidmc.Delete(identityName)
-
-	err := a.archive(identityResourceName, "")
-	if err != nil {
-		return err
-	}
-	a.idc.Delete(identityName)
-
-	err = a.archive(userResourceName, "")
-	if err != nil {
-		return err
-	}
-
-	// TODO: watchout for listing users in namespace here.
-	a.uc.UserV1().Users(a.namespace).Delete(username, &metav1.DeleteOptions{})
-	return nil
 }
 
 // exportTemplate takes a resultant object and prints it to a .yaml file

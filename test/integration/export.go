@@ -2,12 +2,12 @@ package integration
 
 import (
 	"fmt"
-	"testing"
 	"math/rand"
+	"testing"
 	"time"
 
-	gm "github.com/onsi/gomega"
 	log "github.com/Sirupsen/logrus"
+	gm "github.com/onsi/gomega"
 
 	"github.com/openshift/online/archivist/pkg/archive"
 
@@ -31,15 +31,14 @@ func testExport(t *testing.T, h *testHarness) {
 	log.SetLevel(log.DebugLevel)
 	tlog := log.WithFields(log.Fields{
 		"project": pn,
-		"test": "exporttest",
+		"test":    "exporttest",
 	})
 
 	testProject := &projectv1.Project{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      pn,
-			Namespace: "",
-			Annotations: map[string]string{
-			},
+			Name:        pn,
+			Namespace:   "",
+			Annotations: map[string]string{},
 		},
 	}
 	var err error
@@ -62,7 +61,7 @@ func testExport(t *testing.T, h *testHarness) {
 		t.Fatal("error creating deployment config:", err)
 	}
 
-	s := secret(pn,"testsecret")
+	s := secret(pn, "testsecret")
 	s, err = h.kc.Core().Secrets(pn).Create(s)
 	if err != nil {
 		t.Fatal("error creating secret:", err)
@@ -75,13 +74,13 @@ func testExport(t *testing.T, h *testHarness) {
 	gm.Expect(err).NotTo(gm.HaveOccurred())
 
 	// TODO: assert a specific list of object kind/name combos
-	gm.Expect(len(objects.Items)).To(gm.Equal(4))
+	gm.Expect(len(objects.Items)).To(gm.Equal(3))
 
 	/*
-	bcResult := findObj(t, a, objects, "BuildConfig", buildConfig.Name)
-	tlog.Info("Found build", bcResult)
-	dcResult := findObj(t, a, objects, "DeploymentConfig", dc.Name)
-	tlog.Info("Found dc", dcResult)
+		bcResult := findObj(t, a, objects, "BuildConfig", buildConfig.Name)
+		tlog.Info("Found build", bcResult)
+		dcResult := findObj(t, a, objects, "DeploymentConfig", dc.Name)
+		tlog.Info("Found dc", dcResult)
 	*/
 	secretResult := findObj(t, a, objects, "Secret", s.Name)
 	tlog.Info("Found secret", secretResult)
@@ -107,7 +106,7 @@ func findObj(t *testing.T, a *archive.Archiver, list *kapi.List, kind string, na
 	return nil
 }
 
-func logAll(tlog *log.Entry, a *archive.Archiver,  list *kapi.List) {
+func logAll(tlog *log.Entry, a *archive.Archiver, list *kapi.List) {
 	tlog.Infoln("object list:")
 	for _, o := range list.Items {
 		if meta, err := metav1.ObjectMetaFor(o); err == nil {
