@@ -6,11 +6,12 @@ import (
 
 	"github.com/openshift/online/archivist/pkg/api"
 	authclientset "github.com/openshift/origin/pkg/authorization/generated/clientset"
+	osclient "github.com/openshift/origin/pkg/client"
 	projectclientset "github.com/openshift/origin/pkg/project/generated/clientset"
 	userclientset "github.com/openshift/origin/pkg/user/generated/clientset"
-	osclient "github.com/openshift/origin/pkg/client"
 
 	restclient "k8s.io/client-go/rest"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/gorilla/mux"
@@ -29,12 +30,15 @@ var archiverCmd = &cobra.Command{
 		log.SetOutput(os.Stdout)
 		loadConfig(cfgFile)
 
-		restConfig, factory, oc, kc, err := createClients()
+		restConfig, factory, oc, _, err := createClients()
 		if err != nil {
 			log.Panicf("error creating OpenShift/Kubernetes clients: %s", err)
 		}
 
 		projectClient, authClient, userClient, uidMapClient, idClient := CreateOpenshiftAPIClients(restConfig, oc)
+
+		// Use a versioned kubernetes client:
+		kc := kclientset.NewForConfigOrDie(restConfig)
 
 		th := api.NewTransferHandler(projectClient, authClient, userClient,
 			uidMapClient, idClient, factory, oc, kc)

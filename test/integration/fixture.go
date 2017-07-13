@@ -1,41 +1,40 @@
 package integration
 
 import (
-	"testing"
 	"strings"
+	"testing"
 
 	"github.com/openshift/online/archivist/cmd"
 
 	authclientset "github.com/openshift/origin/pkg/authorization/generated/clientset"
+	buildv1 "github.com/openshift/origin/pkg/build/apis/build/v1"
+	buildclientset "github.com/openshift/origin/pkg/build/generated/clientset"
 	osclient "github.com/openshift/origin/pkg/client"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
-	projectclientset "github.com/openshift/origin/pkg/project/generated/clientset"
-	buildclientset "github.com/openshift/origin/pkg/build/generated/clientset"
-	userclientset "github.com/openshift/origin/pkg/user/generated/clientset"
 	deployclientset "github.com/openshift/origin/pkg/deploy/generated/clientset"
-	buildv1 "github.com/openshift/origin/pkg/build/apis/build/v1"
+	projectclientset "github.com/openshift/origin/pkg/project/generated/clientset"
+	userclientset "github.com/openshift/origin/pkg/user/generated/clientset"
 
 	deployv1 "github.com/openshift/origin/pkg/deploy/apis/apps/v1"
 
-	restclient "k8s.io/client-go/rest"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+	restclient "k8s.io/client-go/rest"
 	kapiv1 "k8s.io/kubernetes/pkg/api/v1"
-	kapi "k8s.io/kubernetes/pkg/api"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
 
 	"github.com/spf13/pflag"
 )
 
 type testHarness struct {
-	oc osclient.Interface
-	kc kclientset.Interface
-	restConfig *restclient.Config
+	oc            osclient.Interface
+	kc            kclientset.Interface
+	restConfig    *restclient.Config
 	clientFactory *clientcmd.Factory
 
-	pc projectclientset.Interface
-	ac authclientset.Interface
-	uc userclientset.Interface
-	bc buildclientset.Interface
+	pc           projectclientset.Interface
+	ac           authclientset.Interface
+	uc           userclientset.Interface
+	bc           buildclientset.Interface
 	deployClient deployclientset.Interface
 
 	// TODO: Legacy client usage here until we find their equivalent in new generated clientsets:
@@ -62,10 +61,11 @@ func newTestHarness(t *testing.T) *testHarness {
 			rawc.CurrentContext)
 		t.FailNow()
 	}
-	restConfig, f, oc, kc, err := cmd.CreateClientsForConfig(dcc)
+	restConfig, f, oc, _, err := cmd.CreateClientsForConfig(dcc)
 	if err != nil {
 		t.Fatal(err)
 	}
+	kc := kclientset.NewForConfigOrDie(restConfig)
 
 	pc, ac, uc, uidmc, idc := cmd.CreateOpenshiftAPIClients(restConfig, oc)
 	bc, err := buildclientset.NewForConfig(restConfig)
@@ -78,30 +78,29 @@ func newTestHarness(t *testing.T) *testHarness {
 	}
 
 	return &testHarness{
-		oc: oc,
-		kc: kc,
-		restConfig: restConfig,
+		oc:            oc,
+		kc:            kc,
+		restConfig:    restConfig,
 		clientFactory: f,
 
-		pc: pc,
-		ac: ac,
-		uc: uc,
+		pc:    pc,
+		ac:    ac,
+		uc:    uc,
 		uidmc: uidmc,
-		idc: idc,
+		idc:   idc,
 
-		bc: bc,
+		bc:           bc,
 		deployClient: deployClient,
 	}
 }
 
-func deploymentConfig(version int64, projectName string) *deployv1.DeploymentConfig {
+func deploymentConfig(name string) *deployv1.DeploymentConfig {
 	return &deployv1.DeploymentConfig{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "config",
-			Namespace: projectName,
+			Name: name,
 		},
 		Spec:   dcSpec(),
-		Status: dcStatus(version),
+		Status: dcStatus(1),
 	}
 }
 
@@ -155,8 +154,8 @@ func podTemplateSpec() *kapiv1.PodTemplateSpec {
 	}
 }
 
-func secret(projectName string, name string) *kapi.Secret {
-	return &kapi.Secret{
+func secret(projectName string, name string) *kapiv1.Secret {
+	return &kapiv1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: projectName,
@@ -168,10 +167,11 @@ func secret(projectName string, name string) *kapi.Secret {
 	}
 }
 
-func buildConfig(buildPrefix string) *buildv1.BuildConfig {
+func buildConfig(name string) *buildv1.BuildConfig {
 	buildConfig := &buildv1.BuildConfig{}
 	buildConfig.Spec.RunPolicy = buildv1.BuildRunPolicyParallel
-	buildConfig.GenerateName = buildPrefix
+	//buildConfig.GenerateName = buildPrefix
+	buildConfig.Name = name
 	buildStrategy := buildv1.BuildStrategy{}
 	buildStrategy.DockerStrategy = &buildv1.DockerBuildStrategy{}
 	buildConfig.Spec.Strategy = buildStrategy

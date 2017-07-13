@@ -18,7 +18,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+	kapiv1 "k8s.io/kubernetes/pkg/api/v1"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
 	"k8s.io/kubernetes/pkg/kubectl/resource"
 	"k8s.io/kubernetes/pkg/printers"
 
@@ -28,7 +29,6 @@ import (
 // Archiver allows for a variety of export, import, archive and unarchive operations. One archiver
 // should be created per operation as they are bound to a particular namespace and carry state.
 type Archiver struct {
-	// TODO: Should these use the v1 clients so we don't have to constantly chain method calls to V1?
 	pc projectclientset.Interface
 	ac authclientset.Interface
 	uc userclientset.Interface
@@ -37,15 +37,15 @@ type Archiver struct {
 	uidmc osclient.UserIdentityMappingInterface
 	idc   osclient.IdentityInterface
 
-	oc             osclient.Interface
-	kc             kclientset.Interface
-	f              *clientcmd.Factory
-	mapper         meta.RESTMapper
-	typer          runtime.ObjectTyper
-	projectObjects []runtime.Object
-	namespace      string
-	log            *log.Entry
-	username       string
+	oc              osclient.Interface
+	kc              kclientset.Interface
+	f               *clientcmd.Factory
+	mapper          meta.RESTMapper
+	typer           runtime.ObjectTyper
+	objectsToExport []runtime.Object
+	namespace       string
+	log             *log.Entry
+	username        string
 }
 
 func NewArchiver(
@@ -79,7 +79,7 @@ func NewArchiver(
 		namespace: namespace,
 		username:  username,
 
-		projectObjects: []runtime.Object{},
+		objectsToExport: []runtime.Object{},
 
 		mapper: mapper,
 		typer:  typer,
@@ -89,67 +89,41 @@ func NewArchiver(
 
 // Export generates and returns a list of API objects for the project.
 func (a *Archiver) Export() (*kapi.List, error) {
-	a.log.Info("exporting project")
+	a.log.Info("beginning export")
 
-	projectName := a.namespace
-
-	project, err := a.pc.ProjectV1().Projects().Get(projectName, metav1.GetOptions{})
+	// Ensure project exists:
+	_, err := a.pc.ProjectV1().Projects().Get(a.namespace, metav1.GetOptions{})
 	if err != nil {
-		a.log.Errorln("unable to lookup project", err)
 		return nil, err
 	}
-	a.log.Info("got project", project)
 
 	// Get all resources for this project and archive them. Using this kubectl resource infra
 	// allows us to list all objects generically, instead of hard coding a lookup for each API type
 	// and then having to constantly keep that up to date as more types are added.
-	a.log.Debugln("listing all project resources")
-	r := resource.NewBuilder(a.mapper, a.typer, resource.ClientMapperFunc(a.f.ClientForMapping),
-		kapi.Codecs.UniversalDecoder()).
-		NamespaceParam(projectName).DefaultNamespace().AllNamespaces(false).
-		ResourceTypeOrNameArgs(true, "all").
-		Flatten()
-
-	err = r.Do().Visit(func(info *resource.Info, err error) error {
-		a.log.Debugln("visiting", info.Object.GetObjectKind(), info.Name)
-		// We do not want to archive transient objects such as pods or replication controllers:
-		if info.ResourceMapping().Resource != "pods" &&
-			info.ResourceMapping().Resource != "replicationcontrollers" {
-			resourceName := fmt.Sprintf("%s/%s", info.ResourceMapping().Resource, info.Name)
-
-			// Archive the resource
-			err := a.archive(resourceName, projectName)
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-
-	// Secrets are not included by default when listing all resources. (via deads2k: hardcoded category alias, can't
-	// be changed) We must list them explicitly.
-	secrets, err := a.kc.Core().Secrets(projectName).List(metav1.ListOptions{})
-	a.log.Debugf("found %d secrets", len(secrets.Items))
-	for i := range secrets.Items {
-		// Need to use the index here as we must use the pointer to use as a runtime.Object:
-		s := secrets.Items[i]
-		// Skip certain secret types, we'll let service accounts and such be recreated on the import:
-		if s.Type == kapi.SecretTypeServiceAccountToken ||
-			s.Type == kapi.SecretTypeDockercfg {
-			continue
-		}
-		a.projectObjects = append(a.projectObjects, &s)
+	a.log.Debugln("scanning objects in project")
+	err = a.scanProjectObjects()
+	if err != nil {
+		return nil, err
 	}
 
-	a.log.Debugln("creating template")
+	err = a.scanProjectSecrets()
+	if err != nil {
+		return nil, err
+	}
+
+	a.log.Debug("creating template")
 	// Make exported "template", which is really just a List of resources
+	// TODO: should we switch to an actual template?
 	template := &kapi.List{
 		ListMeta: metav1.ListMeta{},
-		Items:    a.projectObjects,
+		Items:    a.objectsToExport,
 	}
 
 	// This may be redundant config stuff, but version template list
 	clientConfig, err := a.f.ClientConfig()
+	if err != nil {
+		return nil, err
+	}
 	var result runtime.Object
 	outputVersion := *clientConfig.GroupVersion
 	result, err = kapi.Scheme.ConvertToVersion(template, outputVersion)
@@ -161,9 +135,95 @@ func (a *Archiver) Export() (*kapi.List, error) {
 	if err := a.exportTemplate(result); err != nil {
 		return nil, err
 	}
-	a.log.Infoln("export generated successfully")
+	a.log.Infoln("export completed")
 
 	return template, nil
+}
+
+// scanProjectObjects iterates most objects in a project and determines if they should be exported.
+// Some types are not included in this however and must be dealt with separately. (i.e. Secrets)
+func (a *Archiver) scanProjectObjects() error {
+	r := resource.NewBuilder(a.mapper, a.typer, resource.ClientMapperFunc(a.f.ClientForMapping),
+		kapi.Codecs.UniversalDecoder()).
+		NamespaceParam(a.namespace).DefaultNamespace().AllNamespaces(false).
+		ResourceTypeOrNameArgs(true, "all").
+		Flatten()
+
+	err := r.Do().Visit(func(info *resource.Info, err error) error {
+		objLog := a.log.WithFields(log.Fields{
+			"object": fmt.Sprintf("%s/%s", a.ObjKind(info.Object), info.Name),
+		})
+		// We do not want to archive transient objects such as pods or replication controllers:
+		if info.ResourceMapping().Resource != "pods" &&
+			info.ResourceMapping().Resource != "replicationcontrollers" {
+
+			// TODO: May be redundant/unnecessary config settings
+			// Why not use info.Object?
+			clientConfig, err := a.f.ClientConfig()
+			if err != nil {
+				return err
+			}
+			outputVersion := *clientConfig.GroupVersion
+			object, err := resource.AsVersionedObject([]*resource.Info{info}, false, outputVersion, kapi.Codecs.LegacyCodec(outputVersion))
+			if err != nil {
+				return err
+			}
+			objLog.Info("exporting")
+			a.objectsToExport = append(a.objectsToExport, object)
+		} else {
+			objLog.Info("skipping")
+		}
+		return nil
+	})
+
+	if err != nil {
+		a.log.Error("error visiting objects", err)
+		return err
+	}
+	return nil
+}
+
+// scanProjectSecrets explicitly lists all secrets in the project, and if of a valid type will add
+// them to the list of objects to export. Secrets automatically created for service accounts are skipped,
+// as they will be created automatically on import if applicable.
+func (a *Archiver) scanProjectSecrets() error {
+	// Secrets are not included by default when listing all resources. (via deads2k: hardcoded category alias, can't
+	// be changed) We must list them explicitly.
+	a.log.Debug("scanning secrets")
+	secrets, err := a.kc.CoreV1().Secrets(a.namespace).List(metav1.ListOptions{})
+	if err != nil {
+		a.log.Error("error exporting secrets", err)
+		return err
+	}
+	a.log.Debugf("found %d secrets", len(secrets.Items))
+	for i := range secrets.Items {
+		// Need to use the index here as we must use the pointer to use as a runtime.Object:
+		s := secrets.Items[i]
+		objLog := a.log.WithFields(log.Fields{
+			"object": fmt.Sprintf("%s/%s", a.ObjKind(&s), s.Name),
+		})
+		// Skip certain secret types, we'll let service accounts and such be recreated on the import:
+		if s.Type == kapiv1.SecretTypeServiceAccountToken ||
+			s.Type == kapiv1.SecretTypeDockercfg {
+			objLog.Info("skipping")
+			continue
+		}
+		objLog.Info("exporting")
+
+		// Need to convert to a v1 versioned object for export:
+		clientConfig, err := a.f.ClientConfig()
+		if err != nil {
+			return err
+		}
+		outputVersion := *clientConfig.GroupVersion
+		object, err := resource.TryConvert(kapi.Scheme, &s, outputVersion)
+		if err != nil {
+			return err
+		}
+
+		a.objectsToExport = append(a.objectsToExport, object)
+	}
+	return nil
 }
 
 // ObjKind uses the object typer to lookup the plain kind string for an object. (i.e. Project,
@@ -177,7 +237,8 @@ func (a *Archiver) ObjKind(o runtime.Object) string {
 }
 
 // Archive exports a template of the project and associated user metadata, handles snapshots of
-// persistent volumes, and then deletes those objects from the cluster.
+// persistent volumes, archives them to long term storage and then deletes those objects from
+// the cluster.
 func (a *Archiver) Archive() error {
 
 	a.log.Info("beginning archival")
@@ -193,51 +254,6 @@ func (a *Archiver) Archive() error {
 	a.pc.ProjectV1().Projects().Delete(a.namespace, &metav1.DeleteOptions{})
 
 	return nil
-}
-
-// archive adds the given object to the correct array for eventual addition to the template.
-func (a *Archiver) archive(name, namespace string) error {
-	// TODO: for most cases, this looks like a double instance of using the builder/info lookup,
-	// as we already did this for normal objects in the project:
-	a.log.WithFields(log.Fields{"name": name}).Infoln("archiving object")
-	b := resource.NewBuilder(a.mapper, a.typer, resource.ClientMapperFunc(a.f.ClientForMapping),
-		kapi.Codecs.UniversalDecoder()).
-		NamespaceParam(namespace).DefaultNamespace().
-		ResourceTypeOrNameArgs(true, name).
-		Flatten()
-
-	one := false
-	infos, err := b.Do().IntoSingleItemImplied(&one).Infos()
-	if err != nil {
-		a.log.WithFields(log.Fields{"name": name}).Errorln("error getting infos:", err)
-		return err
-	}
-	a.log.WithFields(log.Fields{"name": name}).Infoln("got info")
-
-	// May be redundant/unnecessary config settings
-	clientConfig, err := a.f.ClientConfig()
-	outputVersion := *clientConfig.GroupVersion
-	objects, err := resource.AsVersionedObjects(infos, outputVersion, kapi.Codecs.LegacyCodec(outputVersion))
-	if err != nil {
-		a.log.Errorln("versioned objects error", err)
-		return err
-	}
-
-	err = b.Do().Visit(func(info *resource.Info, err error) error {
-		if err != nil {
-			return err
-		}
-
-		switch info.ResourceMapping().Resource {
-		default:
-			for _, object := range objects {
-				a.projectObjects = append(a.projectObjects, object)
-			}
-		}
-
-		return nil
-	})
-	return err
 }
 
 // exportTemplate takes a resultant object and prints it to a .yaml file

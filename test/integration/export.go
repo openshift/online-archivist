@@ -1,8 +1,10 @@
 package integration
 
 import (
+	"bytes"
 	"fmt"
 	"math/rand"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,11 +14,11 @@ import (
 	"github.com/openshift/online/archivist/pkg/archive"
 
 	projectv1 "github.com/openshift/origin/pkg/project/apis/project/v1"
-	//buildv1 "github.com/openshift/origin/pkg/build/apis/build/v1"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	kapi "k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/printers"
 )
 
 func getTestProjectName(prefix string) string {
@@ -24,14 +26,22 @@ func getTestProjectName(prefix string) string {
 	i := rand.Intn(10000)
 	return fmt.Sprintf("%s-%d", prefix, i)
 }
+func testExportProjectDoesNotExist(t *testing.T, h *testHarness) {
+	gm.RegisterTestingT(t)
+	a := archive.NewArchiver(h.pc, h.ac, h.uc, h.uidmc, h.idc,
+		h.clientFactory, h.oc, h.kc, "nosuchproject", "user")
+	_, err := a.Export()
+	gm.Expect(err).NotTo(gm.BeNil())
+	gm.Expect(err.Error()).Should(gm.ContainSubstring("not found"))
+}
 
 func testExport(t *testing.T, h *testHarness) {
 	gm.RegisterTestingT(t)
 	pn := getTestProjectName("exporttest")
 	log.SetLevel(log.DebugLevel)
 	tlog := log.WithFields(log.Fields{
-		"project": pn,
-		"test":    "exporttest",
+		"namespace": pn,
+		"test":      "exporttest",
 	})
 
 	testProject := &projectv1.Project{
@@ -49,13 +59,13 @@ func testExport(t *testing.T, h *testHarness) {
 	tlog.Info("created test project")
 	defer h.pc.ProjectV1().Projects().Delete(pn, &metav1.DeleteOptions{})
 
-	bc := buildConfig("mybc-")
+	bc := buildConfig("testbc")
 	bc, err = h.bc.BuildV1().BuildConfigs(pn).Create(bc)
 	if err != nil {
 		t.Fatal("error creating build config:", err)
 	}
 
-	dc := deploymentConfig(1, pn)
+	dc := deploymentConfig("testdc")
 	dc, err = h.deployClient.AppsV1().DeploymentConfigs(pn).Create(dc)
 	if err != nil {
 		t.Fatal("error creating deployment config:", err)
@@ -69,27 +79,54 @@ func testExport(t *testing.T, h *testHarness) {
 
 	a := archive.NewArchiver(h.pc, h.ac, h.uc, h.uidmc, h.idc,
 		h.clientFactory, h.oc, h.kc, pn, "user")
-	objects, err := a.Export()
-	logAll(tlog, a, objects)
+	objList, err := a.Export()
+	logAll(tlog, a, objList)
 	gm.Expect(err).NotTo(gm.HaveOccurred())
 
-	// TODO: assert a specific list of object kind/name combos
-	gm.Expect(len(objects.Items)).To(gm.Equal(3))
+	expected := []string{
+		"BuildConfig/testbc",
+		"DeploymentConfig/testdc",
+		"Secret/testsecret",
+	}
 
-	/*
-		bcResult := findObj(t, a, objects, "BuildConfig", buildConfig.Name)
-		tlog.Info("Found build", bcResult)
-		dcResult := findObj(t, a, objects, "DeploymentConfig", dc.Name)
-		tlog.Info("Found dc", dcResult)
-	*/
-	secretResult := findObj(t, a, objects, "Secret", s.Name)
-	tlog.Info("Found secret", secretResult)
-	gm.Expect(secretResult).NotTo(gm.BeNil())
-	// TODO: filter secrets for service accounts
+	t.Run("ExpectedObjectsFound", func(t *testing.T) {
+		gm.RegisterTestingT(t)
+		gm.Expect(len(objList.Items)).To(gm.Equal(len(expected)))
+		for _, s := range expected {
+			tokens := strings.Split(s, "/")
+			kind, name := tokens[0], tokens[1]
+			o := findObj(t, a, objList, kind, name)
+			gm.Expect(o).NotTo(gm.BeNil())
+		}
+	})
+
+	t.Run("ExportedObjectsAreVersioned", func(t *testing.T) {
+		gm.RegisterTestingT(t)
+		// May not be the best way to test if a runtime.Object is "versioned", but this
+		// is exactly how we serialize so very good coverage that the end result is what
+		// we expect.
+		p := printers.YAMLPrinter{}
+		for _, obj := range objList.Items {
+			buf := new(bytes.Buffer)
+			err = p.PrintObj(obj, buf)
+			if err != nil {
+				gm.Expect(err).NotTo(gm.BeNil())
+			}
+			gm.Expect(buf.String()).To(gm.ContainSubstring("apiVersion: v1"))
+		}
+
+	})
+
+	t.Run("SecretsExported", func(t *testing.T) {
+		gm.RegisterTestingT(t)
+		secretResult := findObj(t, a, objList, "Secret", s.Name)
+		gm.Expect(secretResult).NotTo(gm.BeNil())
+	})
+
 	// TODO: make sure cluster info is stripped from objects
 }
 
-// findObj finds an object of he given kind and name. If not found it will error the test.
+// findObj finds an object of the given kind and name. If not found it will return nil.
 func findObj(t *testing.T, a *archive.Archiver, list *kapi.List, kind string, name string) runtime.Object {
 	for _, o := range list.Items {
 		if meta, err := metav1.ObjectMetaFor(o); err == nil {
@@ -101,8 +138,6 @@ func findObj(t *testing.T, a *archive.Archiver, list *kapi.List, kind string, na
 			return nil
 		}
 	}
-	// Fail the test if we can't find the requested object.
-	t.Fatalf("unable to find object %s/%s", kind, name)
 	return nil
 }
 

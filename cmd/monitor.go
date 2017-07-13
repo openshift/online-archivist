@@ -10,8 +10,8 @@ import (
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
 
 	restclient "k8s.io/client-go/rest"
-	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	kclientcmd "k8s.io/client-go/tools/clientcmd"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -55,6 +55,7 @@ func createClients() (*restclient.Config, *clientcmd.Factory, osclient.Interface
 
 // CreateClientsForConfig creates and returns OpenShift and Kubernetes clients (as well as other useful
 // client objects) for the given client config.
+// TODO: stop returning internalversion kclientset
 func CreateClientsForConfig(dcc kclientcmd.ClientConfig) (*restclient.Config, *clientcmd.Factory, osclient.Interface, kclientset.Interface, error) {
 
 	rawConfig, err := dcc.RawConfig()
@@ -68,9 +69,9 @@ func CreateClientsForConfig(dcc kclientcmd.ClientConfig) (*restclient.Config, *c
 	}
 
 	log.WithFields(log.Fields{
-		"APIPath":  clientConfig.APIPath,
-		"Host":     clientConfig.Host,
-		"Username": clientConfig.Username,
+		"APIPath":     clientConfig.APIPath,
+		"Host":        clientConfig.Host,
+		"Username":    clientConfig.Username,
 		"BearerToken": clientConfig.BearerToken,
 	}).Infoln("Created OpenShift client clientConfig:")
 

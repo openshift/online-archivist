@@ -14,7 +14,7 @@ import (
 	projectclientset "github.com/openshift/origin/pkg/project/generated/clientset"
 	userclientset "github.com/openshift/origin/pkg/user/generated/clientset"
 
-	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
 
 	log "github.com/Sirupsen/logrus"
 )

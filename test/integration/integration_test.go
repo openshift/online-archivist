@@ -15,4 +15,5 @@ func TestIntegration(t *testing.T) {
 	h := newTestHarness(t)
 
 	t.Run("ExportSimple", func(t *testing.T) { testExport(t, h) })
+	t.Run("ExportProjectDoesNotExist", func(t *testing.T) { testExportProjectDoesNotExist(t, h) })
 }
