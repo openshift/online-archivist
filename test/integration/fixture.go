@@ -12,10 +12,12 @@ import (
 	osclient "github.com/openshift/origin/pkg/client"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
 	deployclientset "github.com/openshift/origin/pkg/deploy/generated/clientset"
+	imageclientset "github.com/openshift/origin/pkg/image/generated/clientset"
 	projectclientset "github.com/openshift/origin/pkg/project/generated/clientset"
 	userclientset "github.com/openshift/origin/pkg/user/generated/clientset"
 
 	deployv1 "github.com/openshift/origin/pkg/deploy/apis/apps/v1"
+	imagev1 "github.com/openshift/origin/pkg/image/apis/image/v1"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	restclient "k8s.io/client-go/rest"
@@ -36,6 +38,7 @@ type testHarness struct {
 	uc           userclientset.Interface
 	bc           buildclientset.Interface
 	deployClient deployclientset.Interface
+	imageClient  imageclientset.Interface
 
 	// TODO: Legacy client usage here until we find their equivalent in new generated clientsets:
 	uidmc osclient.UserIdentityMappingInterface
@@ -76,6 +79,10 @@ func newTestHarness(t *testing.T) *testHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	imageClient, err := imageclientset.NewForConfig(restConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	return &testHarness{
 		oc:            oc,
@@ -91,17 +98,91 @@ func newTestHarness(t *testing.T) *testHarness {
 
 		bc:           bc,
 		deployClient: deployClient,
+		imageClient:  imageClient,
 	}
 }
 
-func deploymentConfig(name string) *deployv1.DeploymentConfig {
-	return &deployv1.DeploymentConfig{
+func (h *testHarness) createSecret(t *testing.T, projectName string, name string) *kapiv1.Secret {
+	s := &kapiv1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+		Data: map[string][]byte{
+			"foo": []byte("foo"),
+			"bar": []byte("bar"),
+		},
+	}
+	var err error
+	s, err = h.kc.Core().Secrets(projectName).Create(s)
+	if err != nil {
+		t.Fatal("error creating secret:", err)
+	}
+	return s
+}
+
+func (h *testHarness) createSvcAccount(t *testing.T, projectName, name string) *kapiv1.ServiceAccount {
+	sa := &kapiv1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+	}
+
+	var err error
+	sa, err = h.kc.Core().ServiceAccounts(projectName).Create(sa)
+	if err != nil {
+		t.Fatal("error creating service account:", err)
+	}
+	return sa
+}
+
+func (h *testHarness) createBuildConfig(t *testing.T, projectName string, name string) *buildv1.BuildConfig {
+	buildConfig := &buildv1.BuildConfig{}
+	buildConfig.Spec.RunPolicy = buildv1.BuildRunPolicyParallel
+	//buildConfig.GenerateName = buildPrefix
+	buildConfig.Name = name
+	buildStrategy := buildv1.BuildStrategy{}
+	buildStrategy.DockerStrategy = &buildv1.DockerBuildStrategy{}
+	buildConfig.Spec.Strategy = buildStrategy
+	buildConfig.Spec.Source.Git = &buildv1.GitBuildSource{URI: "example.org"}
+
+	var err error
+	buildConfig, err = h.bc.BuildV1().BuildConfigs(projectName).Create(buildConfig)
+	if err != nil {
+		t.Fatal("error creating build config:", err)
+	}
+	return buildConfig
+}
+
+func (h *testHarness) createDeploymentConfig(t *testing.T, projectName string, name string) *deployv1.DeploymentConfig {
+	dc := &deployv1.DeploymentConfig{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
 		},
 		Spec:   dcSpec(),
 		Status: dcStatus(1),
 	}
+	var err error
+	dc, err = h.deployClient.AppsV1().DeploymentConfigs(projectName).Create(dc)
+	if err != nil {
+		t.Fatal("error creating deployment config:", err)
+	}
+	return dc
+}
+
+func (h *testHarness) createImageStream(t *testing.T, projectName string,
+	name string) *imagev1.ImageStream {
+
+	is := &imagev1.ImageStream{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+	}
+	var err error
+	is, err = h.imageClient.ImageV1().ImageStreams(projectName).Create(is)
+	if err != nil {
+		t.Fatal("error creating image stream:", err)
+	}
+	return is
 }
 
 func dcSpec() deployv1.DeploymentConfigSpec {
@@ -152,29 +233,4 @@ func podTemplateSpec() *kapiv1.PodTemplateSpec {
 			Labels: map[string]string{"a": "b"},
 		},
 	}
-}
-
-func secret(projectName string, name string) *kapiv1.Secret {
-	return &kapiv1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: projectName,
-		},
-		Data: map[string][]byte{
-			"foo": []byte("foo"),
-			"bar": []byte("bar"),
-		},
-	}
-}
-
-func buildConfig(name string) *buildv1.BuildConfig {
-	buildConfig := &buildv1.BuildConfig{}
-	buildConfig.Spec.RunPolicy = buildv1.BuildRunPolicyParallel
-	//buildConfig.GenerateName = buildPrefix
-	buildConfig.Name = name
-	buildStrategy := buildv1.BuildStrategy{}
-	buildStrategy.DockerStrategy = &buildv1.DockerBuildStrategy{}
-	buildConfig.Spec.Strategy = buildStrategy
-	buildConfig.Spec.Source.Git = &buildv1.GitBuildSource{URI: "example.org"}
-	return buildConfig
 }

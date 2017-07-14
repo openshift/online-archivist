@@ -59,22 +59,18 @@ func testExport(t *testing.T, h *testHarness) {
 	tlog.Info("created test project")
 	defer h.pc.ProjectV1().Projects().Delete(pn, &metav1.DeleteOptions{})
 
-	bc := buildConfig("testbc")
-	bc, err = h.bc.BuildV1().BuildConfigs(pn).Create(bc)
-	if err != nil {
-		t.Fatal("error creating build config:", err)
-	}
+	h.createDeploymentConfig(t, pn, "testdc")
+	h.createSecret(t, pn, "testsecret")
+	h.createBuildConfig(t, pn, "testbc")
+	h.createSvcAccount(t, pn, "testserviceaccount")
+	h.createImageStream(t, pn, "testis")
 
-	dc := deploymentConfig("testdc")
-	dc, err = h.deployClient.AppsV1().DeploymentConfigs(pn).Create(dc)
-	if err != nil {
-		t.Fatal("error creating deployment config:", err)
-	}
-
-	s := secret(pn, "testsecret")
-	s, err = h.kc.Core().Secrets(pn).Create(s)
-	if err != nil {
-		t.Fatal("error creating secret:", err)
+	expected := []string{
+		"BuildConfig/testbc",
+		"DeploymentConfig/testdc",
+		"Secret/testsecret",
+		"ServiceAccount/testserviceaccount",
+		"ImageStream/testis",
 	}
 
 	a := archive.NewArchiver(h.pc, h.ac, h.uc, h.uidmc, h.idc,
@@ -83,20 +79,15 @@ func testExport(t *testing.T, h *testHarness) {
 	logAll(tlog, a, objList)
 	gm.Expect(err).NotTo(gm.HaveOccurred())
 
-	expected := []string{
-		"BuildConfig/testbc",
-		"DeploymentConfig/testdc",
-		"Secret/testsecret",
-	}
-
 	t.Run("ExpectedObjectsFound", func(t *testing.T) {
 		gm.RegisterTestingT(t)
-		gm.Expect(len(objList.Items)).To(gm.Equal(len(expected)))
+		gm.Expect(len(objList.Items)).To(gm.Equal(len(expected)),
+			"expected object count mismatch")
 		for _, s := range expected {
 			tokens := strings.Split(s, "/")
 			kind, name := tokens[0], tokens[1]
 			o := findObj(t, a, objList, kind, name)
-			gm.Expect(o).NotTo(gm.BeNil())
+			gm.Expect(o).NotTo(gm.BeNil(), "object was not exported: %s", s)
 		}
 	})
 
@@ -114,14 +105,10 @@ func testExport(t *testing.T, h *testHarness) {
 			}
 			gm.Expect(buf.String()).To(gm.ContainSubstring("apiVersion: v1"))
 		}
-
 	})
 
-	t.Run("SecretsExported", func(t *testing.T) {
-		gm.RegisterTestingT(t)
-		secretResult := findObj(t, a, objList, "Secret", s.Name)
-		gm.Expect(secretResult).NotTo(gm.BeNil())
-	})
+	// TODO: we may need more logic and testing around image streams, which should be exported and
+	// how well they work. However we need to get further with import to test how things behave.
 
 	// TODO: make sure cluster info is stripped from objects
 }

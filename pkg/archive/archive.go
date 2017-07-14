@@ -106,7 +106,14 @@ func (a *Archiver) Export() (*kapi.List, error) {
 		return nil, err
 	}
 
+	// Some objects such as secrets and service accounts are not included by default when
+	// listing all resources. (via deads2k: hardcoded category alias, can't
+	// be changed) We must process them explicitly.
 	err = a.scanProjectSecrets()
+	if err != nil {
+		return nil, err
+	}
+	err = a.scanProjectServiceAccounts()
 	if err != nil {
 		return nil, err
 	}
@@ -187,8 +194,6 @@ func (a *Archiver) scanProjectObjects() error {
 // them to the list of objects to export. Secrets automatically created for service accounts are skipped,
 // as they will be created automatically on import if applicable.
 func (a *Archiver) scanProjectSecrets() error {
-	// Secrets are not included by default when listing all resources. (via deads2k: hardcoded category alias, can't
-	// be changed) We must list them explicitly.
 	a.log.Debug("scanning secrets")
 	secrets, err := a.kc.CoreV1().Secrets(a.namespace).List(metav1.ListOptions{})
 	if err != nil {
@@ -210,19 +215,61 @@ func (a *Archiver) scanProjectSecrets() error {
 		}
 		objLog.Info("exporting")
 
-		// Need to convert to a v1 versioned object for export:
-		clientConfig, err := a.f.ClientConfig()
+		err := a.versionAndAppendObject(&s)
 		if err != nil {
 			return err
 		}
-		outputVersion := *clientConfig.GroupVersion
-		object, err := resource.TryConvert(kapi.Scheme, &s, outputVersion)
-		if err != nil {
-			return err
-		}
-
-		a.objectsToExport = append(a.objectsToExport, object)
 	}
+	return nil
+}
+
+// scanProjectServiceAccounts explicitly lists all service accounts in the project, and will
+// export those that appear to be user created. Unfortunately today the best we can do here
+// is skip those with the default names: builder, deployer, default.
+func (a *Archiver) scanProjectServiceAccounts() error {
+	a.log.Debug("scanning service accounts")
+	secrets, err := a.kc.CoreV1().ServiceAccounts(a.namespace).List(metav1.ListOptions{})
+	if err != nil {
+		a.log.Error("error exporting secrets", err)
+		return err
+	}
+	a.log.Debugf("found %d secrets", len(secrets.Items))
+	for i := range secrets.Items {
+		// Need to use the index here as we must use the pointer to use as a runtime.Object:
+		s := secrets.Items[i]
+		objLog := a.log.WithFields(log.Fields{
+			"object": fmt.Sprintf("%s/%s", a.ObjKind(&s), s.Name),
+		})
+		// Skip certain secret types, we'll let service accounts and such be recreated on the import:
+		// TODO: Make this list configurable, with these as the default
+		if s.Name == "builder" || s.Name == "deployer" || s.Name == "default" {
+			objLog.Info("skipping")
+			continue
+		}
+		objLog.Info("exporting")
+
+		err := a.versionAndAppendObject(&s)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// versionAndAppendObject will ensure our Object is v1 versioned, and append to
+// the list of objects for export. This prevents a situation where objects are
+// exported to the template missing a kind and version.
+func (a *Archiver) versionAndAppendObject(obj runtime.Object) error {
+	clientConfig, err := a.f.ClientConfig()
+	if err != nil {
+		return err
+	}
+	outputVersion := *clientConfig.GroupVersion
+	vObj, err := resource.TryConvert(kapi.Scheme, obj, outputVersion)
+	if err != nil {
+		return err
+	}
+	a.objectsToExport = append(a.objectsToExport, vObj)
 	return nil
 }
 
