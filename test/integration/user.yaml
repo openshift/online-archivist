@@ -1,0 +1,123 @@
+apiVersion: v1
+items:
+- apiVersion: v1
+  kind: Project
+  metadata:
+    annotations:
+      openshift.io/display-name: ""
+      openshift.io/sa.scc.mcs: s0:c8,c2
+      openshift.io/sa.scc.supplemental-groups: 1000060000/10000
+      openshift.io/sa.scc.uid-range: 1000060000/10000
+    creationTimestamp: 2017-07-19T13:16:14Z
+    name: project
+    namespace: exporttest-8536
+    resourceVersion: "1339"
+    selfLink: /oapi/v1/projects/exporttest-8536
+    uid: 71010d8e-6c84-11e7-b8d0-54ee7586bd49
+  spec:
+    finalizers:
+    - openshift.io/origin
+    - kubernetes
+  status:
+    phase: Active
+- apiVersion: v1
+  kind: BuildConfig
+  metadata:
+    creationTimestamp: 2017-07-19T13:16:14Z
+    generateName: mybc
+    name: mybcwdh2f
+    # namespace: exporttest-8536
+    resourceVersion: "1340"
+    selfLink: /oapi/v1/namespaces/exporttest-8536/buildconfigs/mybcwdh2f
+    uid: 7104183c-6c84-11e7-b8d0-54ee7586bd49
+  spec:
+    nodeSelector: null
+    output: {}
+    postCommit: {}
+    resources: {}
+    runPolicy: Parallel
+    source:
+      git:
+        uri: example.org
+      type: Git
+    strategy:
+      dockerStrategy: {}
+      type: Docker
+    triggers: []
+  status:
+    lastVersion: 0
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    creationTimestamp: 2017-07-19T13:16:14Z
+    generation: 2
+    name: config
+    # namespace: exporttest-8536
+    resourceVersion: "1361"
+    selfLink: /oapi/v1/namespaces/exporttest-8536/deploymentconfigs/config
+    uid: 71092cd8-6c84-11e7-b8d0-54ee7586bd49
+  spec:
+    replicas: 1
+    selector:
+      a: b
+    strategy:
+      activeDeadlineSeconds: 21600
+      recreateParams:
+        timeoutSeconds: 600
+      resources: {}
+      type: Recreate
+    template:
+      metadata:
+        creationTimestamp: null
+        labels:
+          a: b
+      spec:
+        containers:
+        - env:
+          - name: ENV1
+            value: VAL1
+          image: registry:8080/repo1:ref1
+          imagePullPolicy: IfNotPresent
+          name: container1
+          resources: {}
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+        - image: registry:8080/repo1:ref2
+          imagePullPolicy: IfNotPresent
+          name: container2
+          resources: {}
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+    test: false
+    triggers:
+    - type: ConfigChange
+  status:
+    availableReplicas: 0
+    conditions:
+    - lastTransitionTime: 2017-07-19T13:16:14Z
+      lastUpdateTime: 2017-07-19T13:16:14Z
+      message: Deployment config does not have minimum availability.
+      status: "False"
+      type: Available
+    - lastTransitionTime: 2017-07-19T13:16:14Z
+      lastUpdateTime: 2017-07-19T13:16:14Z
+      message: Created new replication controller "config-1" for version 1
+      reason: NewReplicationControllerCreated
+      status: "True"
+      type: Progressing
+    details:
+      causes:
+      - type: ConfigChange
+      message: config change
+    latestVersion: 1
+    observedGeneration: 2
+    replicas: 0
+    unavailableReplicas: 0
+    updatedReplicas: 0
+kind: List
+metadata: {}

@@ -3,6 +3,7 @@ package archive
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/openshift/online/archivist/pkg/util"
 
@@ -45,6 +46,7 @@ type Archiver struct {
 	mapper          meta.RESTMapper
 	typer           runtime.ObjectTyper
 	objectsToExport []runtime.Object
+	importedObjects []runtime.Object
 	namespace       string
 	log             *log.Entry
 	username        string
@@ -82,6 +84,7 @@ func NewArchiver(
 		username:  username,
 
 		objectsToExport: []runtime.Object{},
+		importedObjects: []runtime.Object{},
 
 		mapper: mapper,
 		typer:  typer,
@@ -147,6 +150,79 @@ func (a *Archiver) Export() (*kapi.List, error) {
 	a.log.Infoln("export completed")
 
 	return template, nil
+}
+
+// createAndRefresh creates an object from input info and refreshes info with that object
+func createAndRefresh(info *resource.Info) error {
+	obj, err := resource.NewHelper(info.Client, info.Mapping).Create(info.Namespace, true, info.Object)
+	if err != nil {
+		return err
+	}
+	info.Refresh(obj, true)
+	return nil
+}
+
+// Import generates API objects for the project based on a template (currently a YAML string).
+func (a *Archiver) Import(yamlInput string) error {
+	a.log.Info("beginning import")
+
+	reader := strings.NewReader(yamlInput)
+
+	// create the build
+	build := resource.NewBuilder(a.mapper, a.typer, resource.ClientMapperFunc(a.f.ClientForMapping),
+		kapi.Codecs.UniversalDecoder()).
+		ContinueOnError().
+		NamespaceParam(a.namespace).DefaultNamespace().AllNamespaces(false).
+		// ResourceTypeOrNameArgs(true, "all").
+		Flatten()
+	a.log.Info("build created")
+
+	// complete the build with the YAML string
+	completeBuild := build.Stream(reader, "error building from YAML")
+	a.log.Info("build completed from YAML")
+
+	// create visitors for each resource
+	err := completeBuild.Do().Visit(func(info *resource.Info, err error) error {
+		if err != nil {
+			return err
+		}
+		objLog := a.log.WithFields(log.Fields{
+			"object": fmt.Sprintf("%s/%s", a.ObjKind(info.Object), info.Name),
+		})
+
+		// should there be a check for transient objects on import as a secondary check?
+		if info.ResourceMapping().Resource != "pods" &&
+			info.ResourceMapping().Resource != "replicationcontrollers" {
+
+			// TODO: May be redundant/unnecessary config settings
+			// Why not use info.Object?
+			// clientConfig, err := a.f.ClientConfig()
+			// if err != nil {
+			// 	return err
+			// }
+
+			// do we need something explicit for the input version or is this taken care of somewhere else?
+
+			err = createAndRefresh(info)
+			if err != nil {
+				objLog.Info("error creating object")
+				return err
+			}
+
+			objLog.Info("importing")
+			// a.importedObjects = append(a.importedObjects, object)
+		} else {
+			objLog.Info("skipping")
+		}
+		return nil
+	})
+
+	if err != nil {
+		a.log.Error("error visiting objects", err)
+		return err
+	}
+
+	return nil
 }
 
 // scanProjectObjects iterates most objects in a project and determines if they should be exported.
@@ -366,6 +442,17 @@ func (a *Archiver) exportTemplate(obj runtime.Object) error {
 	if err != nil {
 		return err
 	}
+	return nil
+}
+
+// importTemplate takes .yaml file and creates a resultant object
+func (a *Archiver) importTemplate(yamlObject string) error {
+
+	a.log.Infoln("reading from YAML file")
+	// create runtime.Object
+
+	// append to objectsImported
+	// a.objectsImported = append(a.objectsImported, obj)
 	return nil
 }
 
