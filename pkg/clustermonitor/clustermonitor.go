@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/openshift/online/archivist/pkg/config"
+	"github.com/openshift/online/archivist/pkg/util"
 
 	oclient "github.com/openshift/origin/pkg/client"
 
@@ -210,7 +211,7 @@ func (a *ClusterMonitor) getNamespacesToArchive(checkTime time.Time) ([]LastActi
 
 	for _, nsPtr := range namespaces {
 		namespace := nsPtr.(*kapi.Namespace)
-		if stringInSlice(namespace.Name, a.clusterCfg.ProtectedNamespaces) {
+		if util.StringInSlice(namespace.Name, a.clusterCfg.ProtectedNamespaces) {
 			capLog.WithFields(log.Fields{"namespace": namespace.Name}).Debugln("skipping protected namespace")
 			continue
 		}
@@ -316,16 +317,6 @@ func (a *ClusterMonitor) GetLastActivity(namespace string) (time.Time, error) {
 	return a.getLastActivity(namespace)
 }
 
-func stringInSlice(a string, list []string) bool {
-	for _, b := range list {
-
-		if b == a {
-			return true
-		}
-	}
-	return false
-}
-
 func (a *ClusterMonitor) getLastActivity(namespace string) (time.Time, error) {
 	nsLog := log.WithFields(log.Fields{
 		"namespace": namespace,
@@ -335,7 +326,7 @@ func (a *ClusterMonitor) getLastActivity(namespace string) (time.Time, error) {
 	// Not necessarily a problem here, but worth warning about:
 	// set lookup using structs as a key in a map
 	// set from slice -> sets package (sets.NewString)
-	if stringInSlice(namespace, a.clusterCfg.ProtectedNamespaces) {
+	if util.StringInSlice(namespace, a.clusterCfg.ProtectedNamespaces) {
 		nsLog.Warnln("called getLastActivity for protected namespace")
 	}
 

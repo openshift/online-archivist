@@ -15,9 +15,11 @@ import (
 
 	projectv1 "github.com/openshift/origin/pkg/project/apis/project/v1"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	kapi "k8s.io/kubernetes/pkg/api"
+	kapiv1 "k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/printers"
 )
 
@@ -26,6 +28,7 @@ func getTestProjectName(prefix string) string {
 	i := rand.Intn(10000)
 	return fmt.Sprintf("%s-%d", prefix, i)
 }
+
 func testExportProjectDoesNotExist(t *testing.T, h *testHarness) {
 	gm.RegisterTestingT(t)
 	a := archive.NewArchiver(h.pc, h.ac, h.uc, h.uidmc, h.idc,
@@ -61,16 +64,45 @@ func testExport(t *testing.T, h *testHarness) {
 
 	h.createDeploymentConfig(t, pn, "testdc")
 	h.createSecret(t, pn, "testsecret")
+
+	buildSecret := h.createBuildSecret(t, pn, "dockerbuildsecret")
+
+	// Add the build secret to the default builder SA. Note that these service accounts may take
+	// a few seconds to appear after the project is created.
+	err = retry(10, 500*time.Millisecond, tlog, func() (err error) {
+		bsa, err := h.kc.CoreV1().ServiceAccounts(pn).Get("builder", metav1.GetOptions{})
+		if err != nil {
+			return
+		}
+		bsa.ImagePullSecrets = append(bsa.ImagePullSecrets, kapiv1.LocalObjectReference{buildSecret.GetName()})
+		_, err = h.kc.CoreV1().ServiceAccounts(pn).Update(bsa)
+		if err != nil {
+			return
+		}
+		return
+	})
+	if err != nil {
+		t.Fatalf("error updating builder service accont: %s", err)
+	}
+
 	h.createBuildConfig(t, pn, "testbc")
+	// We do not expect to see this in the results:
+	h.createBuild(t, pn)
 	h.createSvcAccount(t, pn, "testserviceaccount")
-	h.createImageStream(t, pn, "testis")
+	h.createRegistryImageStream(t, pn, "integratedregistry")
+	h.createExternalImageStream(t, pn, "postgresql")
 
 	expected := []string{
 		"BuildConfig/testbc",
 		"DeploymentConfig/testdc",
 		"Secret/testsecret",
+		"Secret/dockerbuildsecret",
 		"ServiceAccount/testserviceaccount",
-		"ImageStream/testis",
+		"ServiceAccount/builder",
+		"ServiceAccount/deployer",
+		"ServiceAccount/default",
+		"ImageStream/integratedregistry",
+		"ImageStream/postgresql",
 	}
 
 	a := archive.NewArchiver(h.pc, h.ac, h.uc, h.uidmc, h.idc,
@@ -111,13 +143,34 @@ func testExport(t *testing.T, h *testHarness) {
 	// how well they work. However we need to get further with import to test how things behave.
 
 	// TODO: make sure cluster info is stripped from objects
+	t.Run("ExportedObjectsHaveClusterMetadataStripped", func(t *testing.T) {
+		gm.RegisterTestingT(t)
+		for _, obj := range objList.Items {
+			accessor, err := meta.Accessor(obj)
+			gm.Expect(err).NotTo(gm.HaveOccurred())
+			gm.Expect(accessor.GetUID()).To(gm.BeZero(), "%s has UID set", accessor.GetName())
+			gm.Expect(accessor.GetNamespace()).To(gm.BeZero(), "%s has namespace set", accessor.GetName())
+			gm.Expect(accessor.GetCreationTimestamp()).To(gm.BeZero(), "%s has creation time set", accessor.GetName())
+			gm.Expect(accessor.GetDeletionTimestamp()).To(gm.BeNil(), "%s has deletion time set", accessor.GetName())
+			gm.Expect(accessor.GetResourceVersion()).To(gm.BeZero(), "%s has resource version set", accessor.GetName())
+			gm.Expect(accessor.GetSelfLink()).To(gm.BeZero(), "%s has self link set", accessor.GetName())
+		}
+	})
+
+	t.Run("ExportedBuilderSAHasCustomDockercfgSecret", func(t *testing.T) {
+		gm.RegisterTestingT(t)
+		bsao := findObj(t, a, objList, "ServiceAccount", "builder")
+		ebsa := bsao.(*kapiv1.ServiceAccount)
+		gm.Expect(len(ebsa.ImagePullSecrets)).To(gm.Equal(1))
+		gm.Expect(ebsa.ImagePullSecrets[0].Name).To(gm.Equal("dockerbuildsecret"))
+	})
 }
 
 // findObj finds an object of the given kind and name. If not found it will return nil.
 func findObj(t *testing.T, a *archive.Archiver, list *kapi.List, kind string, name string) runtime.Object {
 	for _, o := range list.Items {
-		if meta, err := metav1.ObjectMetaFor(o); err == nil {
-			if a.ObjKind(o) == kind && meta.Name == name {
+		if md, err := metav1.ObjectMetaFor(o); err == nil {
+			if a.ObjKind(o) == kind && md.Name == name {
 				return o
 			}
 		} else {
@@ -131,8 +184,8 @@ func findObj(t *testing.T, a *archive.Archiver, list *kapi.List, kind string, na
 func logAll(tlog *log.Entry, a *archive.Archiver, list *kapi.List) {
 	tlog.Infoln("object list:")
 	for _, o := range list.Items {
-		if meta, err := metav1.ObjectMetaFor(o); err == nil {
-			tlog.Infof("   %s/%s", a.ObjKind(o), meta.Name)
+		if md, err := metav1.ObjectMetaFor(o); err == nil {
+			tlog.Infof("   %s/%s", a.ObjKind(o), md.Name)
 		} else {
 			tlog.Errorf("error loading ObjectMeta for: %s", o)
 		}

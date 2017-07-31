@@ -1,13 +1,14 @@
 package integration
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openshift/online/archivist/cmd"
 
 	authclientset "github.com/openshift/origin/pkg/authorization/generated/clientset"
-	buildv1 "github.com/openshift/origin/pkg/build/apis/build/v1"
 	buildclientset "github.com/openshift/origin/pkg/build/generated/clientset"
 	osclient "github.com/openshift/origin/pkg/client"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
@@ -16,6 +17,8 @@ import (
 	projectclientset "github.com/openshift/origin/pkg/project/generated/clientset"
 	userclientset "github.com/openshift/origin/pkg/user/generated/clientset"
 
+	buildapi "github.com/openshift/origin/pkg/build/apis/build"
+	buildv1 "github.com/openshift/origin/pkg/build/apis/build/v1"
 	deployv1 "github.com/openshift/origin/pkg/deploy/apis/apps/v1"
 	imagev1 "github.com/openshift/origin/pkg/image/apis/image/v1"
 
@@ -24,6 +27,7 @@ import (
 	kapiv1 "k8s.io/kubernetes/pkg/api/v1"
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
 
+	log "github.com/Sirupsen/logrus"
 	"github.com/spf13/pflag"
 )
 
@@ -120,6 +124,24 @@ func (h *testHarness) createSecret(t *testing.T, projectName string, name string
 	return s
 }
 
+func (h *testHarness) createBuildSecret(t *testing.T, projectName string, name string) *kapiv1.Secret {
+	s := &kapiv1.Secret{
+		Type: kapiv1.SecretTypeDockercfg,
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+		Data: map[string][]byte{
+			".dockercfg": []byte(`{"https://index.docker.io/v1/":{"auth": "Zm9vOmJhcgo=", "email": ""}}`),
+		},
+	}
+	var err error
+	s, err = h.kc.Core().Secrets(projectName).Create(s)
+	if err != nil {
+		t.Fatal("error creating secret:", err)
+	}
+	return s
+}
+
 func (h *testHarness) createSvcAccount(t *testing.T, projectName, name string) *kapiv1.ServiceAccount {
 	sa := &kapiv1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
@@ -169,7 +191,7 @@ func (h *testHarness) createDeploymentConfig(t *testing.T, projectName string, n
 	return dc
 }
 
-func (h *testHarness) createImageStream(t *testing.T, projectName string,
+func (h *testHarness) createRegistryImageStream(t *testing.T, projectName string,
 	name string) *imagev1.ImageStream {
 
 	is := &imagev1.ImageStream{
@@ -183,6 +205,58 @@ func (h *testHarness) createImageStream(t *testing.T, projectName string,
 		t.Fatal("error creating image stream:", err)
 	}
 	return is
+}
+
+func (h *testHarness) createExternalImageStream(t *testing.T, projectName string,
+	name string) *imagev1.ImageStream {
+
+	is := &imagev1.ImageStream{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+		Spec: imagev1.ImageStreamSpec{
+			LookupPolicy: imagev1.ImageLookupPolicy{Local: false},
+			Tags: []imagev1.TagReference{
+				imagev1.TagReference{
+					Name:            "9.5",
+					ReferencePolicy: imagev1.TagReferencePolicy{Type: imagev1.SourceTagReferencePolicy},
+					From: &kapiv1.ObjectReference{
+						Kind: "DockerImage",
+						Name: "centos/postgresql-95-centos7",
+					},
+				},
+			},
+		},
+	}
+	var err error
+	is, err = h.imageClient.ImageV1().ImageStreams(projectName).Create(is)
+	if err != nil {
+		t.Fatal("error creating image stream:", err)
+	}
+	return is
+}
+
+func (h *testHarness) createBuild(t *testing.T, projectName string) *buildv1.Build {
+	build := &buildv1.Build{ObjectMeta: metav1.ObjectMeta{
+		Labels: map[string]string{
+			buildapi.BuildConfigLabel:    "mock-build-config",
+			buildapi.BuildRunPolicyLabel: string(buildapi.BuildRunPolicyParallel),
+		},
+	}}
+	build.Name = "test-build"
+	build.Spec.Source.Git = &buildv1.GitBuildSource{URI: "http://build.uri/build"}
+	build.Spec.Strategy.DockerStrategy = &buildv1.DockerBuildStrategy{}
+	build.Spec.Output.To = &kapiv1.ObjectReference{
+		Kind: "DockerImage",
+		Name: "namespace/image",
+	}
+
+	var err error
+	build, err = h.bc.BuildV1().Builds(projectName).Create(build)
+	if err != nil {
+		t.Fatal("error creating build:", err)
+	}
+	return build
 }
 
 func dcSpec() deployv1.DeploymentConfigSpec {
@@ -233,4 +307,21 @@ func podTemplateSpec() *kapiv1.PodTemplateSpec {
 			Labels: map[string]string{"a": "b"},
 		},
 	}
+}
+
+func retry(attempts int, sleep time.Duration, tlog *log.Entry, callback func() error) (err error) {
+	for i := 0; ; i++ {
+		err = callback()
+		if err == nil {
+			return
+		}
+
+		if i >= (attempts - 1) {
+			break
+		}
+
+		time.Sleep(sleep)
+		tlog.Warnf("retrying after error: %s attempt: %d/%d", err, i+1, attempts)
+	}
+	return fmt.Errorf("function failed after %d attempts, last error: %s", attempts, err)
 }
