@@ -131,17 +131,20 @@ func (a *ClusterMonitor) Run(stopChan <-chan struct{}) {
 	syncTimer := time.NewTimer(time.Minute * 5)
 	go func() {
 		<-syncTimer.C
-		log.Fatal("informers have not synced, timeout at 5 minutes.")
+		log.Fatal("informers have not synced, timeout after 5 minutes.")
 	}()
 	for {
 		// use hassynced method to check build, rc, and ns informers status
 		if a.buildInformer.HasSynced() == true && a.rcInformer.HasSynced() == true && a.nsInformer.HasSynced() == true {
-			log.Infoln("informers have all synced, timer has stopped, continuing")
+			log.Infoln("informers synced")
 			syncTimer.Stop()
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+
+	// Run an initial check on startup:
+	go a.checkCapacity()
 
 	// ticker for MonitorCheckInterval
 	duration := a.cfg.MonitorCheckInterval
