@@ -11,7 +11,7 @@ import (
 	log "github.com/Sirupsen/logrus"
 	gm "github.com/onsi/gomega"
 
-	"github.com/openshift/online/archivist/pkg/archive"
+	"github.com/openshift/online-archivist/pkg/archive"
 
 	projectv1 "github.com/openshift/origin/pkg/project/apis/project/v1"
 

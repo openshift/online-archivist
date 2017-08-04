@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openshift/online/archivist/cmd"
+	"github.com/openshift/online-archivist/cmd"
 
 	authclientset "github.com/openshift/origin/pkg/authorization/generated/clientset"
 	buildclientset "github.com/openshift/origin/pkg/build/generated/clientset"

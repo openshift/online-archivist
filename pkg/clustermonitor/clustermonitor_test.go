@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openshift/online/archivist/pkg/config"
+	"github.com/openshift/online-archivist/pkg/config"
 
 	buildapi "github.com/openshift/origin/pkg/build/apis/build"
 	otestclient "github.com/openshift/origin/pkg/client/testclient"

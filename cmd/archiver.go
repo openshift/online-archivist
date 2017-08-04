@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/openshift/online/archivist/pkg/api"
+	"github.com/openshift/online-archivist/pkg/api"
 	authclientset "github.com/openshift/origin/pkg/authorization/generated/clientset"
 	osclient "github.com/openshift/origin/pkg/client"
 	projectclientset "github.com/openshift/origin/pkg/project/generated/clientset"

@@ -5,8 +5,8 @@ import (
 	"io/ioutil"
 	"net/http"
 
-	"github.com/openshift/online/archivist/pkg/archive"
-	"github.com/openshift/online/archivist/pkg/model"
+	"github.com/openshift/online-archivist/pkg/archive"
+	"github.com/openshift/online-archivist/pkg/model"
 
 	authclientset "github.com/openshift/origin/pkg/authorization/generated/clientset"
 	osclient "github.com/openshift/origin/pkg/client"

@@ -3,8 +3,8 @@ package cmd
 import (
 	"os"
 
-	"github.com/openshift/online/archivist/pkg/clustermonitor"
-	"github.com/openshift/online/archivist/pkg/config"
+	"github.com/openshift/online-archivist/pkg/clustermonitor"
+	"github.com/openshift/online-archivist/pkg/config"
 
 	osclient "github.com/openshift/origin/pkg/client"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"

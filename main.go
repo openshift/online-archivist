@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/openshift/online/archivist/cmd"
+	"github.com/openshift/online-archivist/cmd"
 )
 
 func main() {

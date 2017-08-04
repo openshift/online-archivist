@@ -5,8 +5,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/openshift/online/archivist/pkg/config"
-	"github.com/openshift/online/archivist/pkg/util"
+	"github.com/openshift/online-archivist/pkg/config"
+	"github.com/openshift/online-archivist/pkg/util"
 
 	oclient "github.com/openshift/origin/pkg/client"
 
