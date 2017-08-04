@@ -1,12 +1,12 @@
 {
 	"source": {
 		"cluster": {
-			"namespace": "test"
+			"namespace": "project1"
 		}
 	},
 	"dest": {
 		"cluster": {
-			"namespace": "test-restore"
+			"namespace": "project2"
 		}
 	}
 

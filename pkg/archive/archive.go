@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"strings"
@@ -92,8 +93,8 @@ func NewArchiver(
 	}
 }
 
-// Export generates and returns a list of API objects for the project.
-func (a *Archiver) Export() (*kapi.List, error) {
+// Export generates and returns a kapi.List containing all exported objects from the project.
+func (a *Archiver) Export() (runtime.Object, error) {
 	a.log.Info("beginning export")
 
 	// Ensure project exists:
@@ -149,7 +150,7 @@ func (a *Archiver) Export() (*kapi.List, error) {
 	}
 	a.log.Infoln("export completed")
 
-	return template, nil
+	return result, nil
 }
 
 // createAndRefresh creates an object from input info and refreshes info with that object
@@ -408,24 +409,43 @@ func (a *Archiver) ObjKind(o runtime.Object) string {
 	return kinds[0].Kind
 }
 
+func serializeObjList(list runtime.Object) (string, error) {
+	p := printers.YAMLPrinter{}
+	buf := new(bytes.Buffer)
+	err := p.PrintObj(list, buf)
+	if err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
 // Archive exports a template of the project and associated user metadata, handles snapshots of
 // persistent volumes, archives them to long term storage and then deletes those objects from
 // the cluster.
-func (a *Archiver) Archive() error {
+func (a *Archiver) Archive() (string, error) {
 
 	a.log.Info("beginning archival")
 
-	_, err := a.Export()
+	objList, err := a.Export()
 	if err != nil {
-		return err
+		return "", err
 	}
+
+	// Serialize the objList to a string for return.
+	yamlStr, err := serializeObjList(objList)
+	if err != nil {
+		return "", err
+	}
+
+	a.log.Debug("got yaml string from export")
+	a.log.Debug(yamlStr)
 
 	// Finally delete the project. Note that this may take some time but the project
 	// should be marked as in Terminating status much more quickly. This will cleanup
 	// most objects we're concerned about.
 	a.pc.ProjectV1().Projects().Delete(a.namespace, &metav1.DeleteOptions{})
 
-	return nil
+	return yamlStr, nil
 }
 
 // exportTemplate takes a resultant object and prints it to a .yaml file

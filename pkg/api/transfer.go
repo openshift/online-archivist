@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"io/ioutil"
 	"net/http"
 
@@ -85,6 +86,7 @@ func (th TransferHandler) initiateTransfer(r *http.Request) (httpStatus int, err
 	}
 	reqLog.Infoln("parsed transfer", t)
 
+	var yamlStr string
 	if t.Source.Cluster != nil {
 		archiver := archive.NewArchiver(
 			th.projectClient,
@@ -97,7 +99,7 @@ func (th TransferHandler) initiateTransfer(r *http.Request) (httpStatus int, err
 			th.kc,
 			t.Source.Cluster.Namespace,
 			"admin")
-		err := archiver.Archive()
+		yamlStr, err = archiver.Archive()
 		if err != nil {
 			reqLog.Errorln(err)
 			return http.StatusInternalServerError, err
@@ -105,6 +107,9 @@ func (th TransferHandler) initiateTransfer(r *http.Request) (httpStatus int, err
 	}
 
 	if t.Dest.Cluster != nil {
+		if t.Source.Cluster == nil {
+			return http.StatusBadRequest, errors.New("no source specifies for transfer")
+		}
 		archiver := archive.NewArchiver(
 			th.projectClient,
 			th.authClient,
@@ -116,7 +121,7 @@ func (th TransferHandler) initiateTransfer(r *http.Request) (httpStatus int, err
 			th.kc,
 			t.Dest.Cluster.Namespace,
 			"admin")
-		err := archiver.Unarchive()
+		err := archiver.Import(yamlStr)
 		if err != nil {
 			reqLog.Errorln(err)
 			return http.StatusInternalServerError, err
