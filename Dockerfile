@@ -8,7 +8,7 @@ ENV PATH=/go/bin:$PATH GOPATH=/go
       #version="v1.0.0" \
       #architecture="x86_64"
 
-ADD . /go/src/github.com/openshift/online/archivist
+ADD . /go/src/github.com/openshift/online-archivist
 
 #RUN yum-config-manager --enable rhel-7-server-optional-rpms && \
     #INSTALL_PKGS="golang make" && \
@@ -16,6 +16,6 @@ ADD . /go/src/github.com/openshift/online/archivist
     #rpm -V $INSTALL_PKGS && \
     #yum clean all -y
 
-WORKDIR /go/src/github.com/openshift/online/archivist
+WORKDIR /go/src/github.com/openshift/online-archivist
 RUN make build TARGET=prod
 ENTRYPOINT ["archivist"]
