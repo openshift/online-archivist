@@ -12,7 +12,7 @@ endif
 
 # Builds and installs the archivist binary.
 build: check-gopath
-	go install
+	go build -i -o $(GOPATH)/bin/archivist
 .PHONY: build
 
 
