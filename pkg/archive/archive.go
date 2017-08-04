@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/openshift/online-archivist/pkg/util"
+	"github.com/openshift/online/archivist/pkg/util"
 
 	authclientset "github.com/openshift/origin/pkg/authorization/generated/clientset"
 	osclient "github.com/openshift/origin/pkg/client"
@@ -509,6 +509,7 @@ func (a *Archiver) scanServiceAccountsForImport(info *resource.Info) error {
 		a.log.Error("error finding service accounts", err)
 		return err
 	}
+
 	a.log.Debugf("found %d service accounts", len(sas.Items))
 
 	for i := range sas.Items {

@@ -142,6 +142,21 @@ func (h *testHarness) createBuildSecret(t *testing.T, projectName string, name s
 	return s
 }
 
+func (h *testHarness) createService(t *testing.T, projectName, name string) *kapiv1.Service {
+	s := &kapiv1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+		Spec: serviceSpec(),
+	}
+	var err error
+	s, err = h.kc.Core().Services(projectName).Create(s)
+	if err != nil {
+		t.Fatal("error creating service:", err)
+	}
+	return s
+}
+
 func (h *testHarness) createSvcAccount(t *testing.T, projectName, name string) *kapiv1.ServiceAccount {
 	sa := &kapiv1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
@@ -257,6 +272,20 @@ func (h *testHarness) createBuild(t *testing.T, projectName string) *buildv1.Bui
 		t.Fatal("error creating build:", err)
 	}
 	return build
+}
+
+func serviceSpec() kapiv1.ServiceSpec {
+	return kapiv1.ServiceSpec{
+		ClusterIP: "172.30.79.125",
+		Ports: []kapiv1.ServicePort{
+			{
+				Name:     "8080-tcp",
+				Port:     8080,
+				Protocol: "TCP",
+				// TargetPort: intstr.IntOrString(8080),
+			},
+		},
+	}
 }
 
 func dcSpec() deployv1.DeploymentConfigSpec {

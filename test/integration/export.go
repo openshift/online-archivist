@@ -90,6 +90,7 @@ func testExport(t *testing.T, h *testHarness) {
 	h.createSvcAccount(t, pn, "testserviceaccount")
 	h.createRegistryImageStream(t, pn, "integratedregistry")
 	h.createExternalImageStream(t, pn, "postgresql")
+	h.createService(t, pn, "testservice")
 
 	expected := []string{
 		"BuildConfig/testbc",
@@ -102,6 +103,7 @@ func testExport(t *testing.T, h *testHarness) {
 		"ServiceAccount/default",
 		"ImageStream/integratedregistry",
 		"ImageStream/postgresql",
+		"Service/testservice",
 	}
 
 	a := archive.NewArchiver(h.pc, h.ac, h.uc, h.uidmc, h.idc,
@@ -163,6 +165,14 @@ func testExport(t *testing.T, h *testHarness) {
 		ebsa := bsao.(*kapiv1.ServiceAccount)
 		gm.Expect(len(ebsa.ImagePullSecrets)).To(gm.Equal(1))
 		gm.Expect(ebsa.ImagePullSecrets[0].Name).To(gm.Equal("dockerbuildsecret"))
+	})
+
+	t.Run("ExportedClusterIpIsCleared", func(t *testing.T) {
+		gm.RegisterTestingT(t)
+		so := findObj(t, a, objList, "Service", "testservice")
+		eso := so.(*kapiv1.Service)
+		gm.Expect(len(eso.Spec.ClusterIP)).To(gm.Equal(0))
+		gm.Expect(eso.Spec.ClusterIP).To(gm.Equal(""), "cluster is is not empty")
 	})
 }
 
