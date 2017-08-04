@@ -68,6 +68,19 @@ func testImportViaStream(t *testing.T, h *testHarness) {
 	tlog.Info("created test project")
 	defer h.pc.ProjectV1().Projects().Delete(pn, &metav1.DeleteOptions{})
 
+	expected := []string{
+		"BuildConfig/testbc",
+		"DeploymentConfig/testdc",
+		"Secret/testsecret",
+		"Secret/dockerbuildsecret",
+		"ServiceAccount/testserviceaccount",
+		"ServiceAccount/builder",
+		"ServiceAccount/deployer",
+		"ServiceAccount/default",
+		"ImageStream/integratedregistry",
+		"ImageStream/postgresql",
+	}
+
 	a := archive.NewArchiver(h.pc, h.ac, h.uc, h.uidmc, h.idc,
 		h.clientFactory, h.oc, h.kc, pn, "user")
 

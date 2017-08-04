@@ -3,19 +3,16 @@ package archive
 import (
 	"bytes"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"strings"
 
-	"github.com/openshift/online-archivist/pkg/util"
+	"github.com/openshift/online/archivist/pkg/util"
 
 	authclientset "github.com/openshift/origin/pkg/authorization/generated/clientset"
 	osclient "github.com/openshift/origin/pkg/client"
-	"github.com/openshift/origin/pkg/cmd/admin/policy"
-	"github.com/openshift/origin/pkg/cmd/server/bootstrappolicy"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
-	projectapi "github.com/openshift/origin/pkg/project/apis/project"
 	projectclientset "github.com/openshift/origin/pkg/project/generated/clientset"
-	userapi "github.com/openshift/origin/pkg/user/apis/user"
 	userclientset "github.com/openshift/origin/pkg/user/generated/clientset"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -47,7 +44,7 @@ type Archiver struct {
 	mapper          meta.RESTMapper
 	typer           runtime.ObjectTyper
 	objectsToExport []runtime.Object
-	importedObjects []runtime.Object
+	objectsImported []runtime.Object //use for testing
 	namespace       string
 	log             *log.Entry
 	username        string
@@ -85,7 +82,7 @@ func NewArchiver(
 		username:  username,
 
 		objectsToExport: []runtime.Object{},
-		importedObjects: []runtime.Object{},
+		objectsImported: []runtime.Object{},
 
 		mapper: mapper,
 		typer:  typer,
@@ -151,79 +148,6 @@ func (a *Archiver) Export() (runtime.Object, error) {
 	a.log.Infoln("export completed")
 
 	return result, nil
-}
-
-// createAndRefresh creates an object from input info and refreshes info with that object
-func createAndRefresh(info *resource.Info) error {
-	obj, err := resource.NewHelper(info.Client, info.Mapping).Create(info.Namespace, true, info.Object)
-	if err != nil {
-		return err
-	}
-	info.Refresh(obj, true)
-	return nil
-}
-
-// Import generates API objects for the project based on a template (currently a YAML string).
-func (a *Archiver) Import(yamlInput string) error {
-	a.log.Info("beginning import")
-
-	reader := strings.NewReader(yamlInput)
-
-	// create the build
-	build := resource.NewBuilder(a.mapper, a.typer, resource.ClientMapperFunc(a.f.ClientForMapping),
-		kapi.Codecs.UniversalDecoder()).
-		ContinueOnError().
-		NamespaceParam(a.namespace).DefaultNamespace().AllNamespaces(false).
-		// ResourceTypeOrNameArgs(true, "all").
-		Flatten()
-	a.log.Info("build created")
-
-	// complete the build with the YAML string
-	completeBuild := build.Stream(reader, "error building from YAML")
-	a.log.Info("build completed from YAML")
-
-	// create visitors for each resource
-	err := completeBuild.Do().Visit(func(info *resource.Info, err error) error {
-		if err != nil {
-			return err
-		}
-		objLog := a.log.WithFields(log.Fields{
-			"object": fmt.Sprintf("%s/%s", a.ObjKind(info.Object), info.Name),
-		})
-
-		// should there be a check for transient objects on import as a secondary check?
-		if info.ResourceMapping().Resource != "pods" &&
-			info.ResourceMapping().Resource != "replicationcontrollers" {
-
-			// TODO: May be redundant/unnecessary config settings
-			// Why not use info.Object?
-			// clientConfig, err := a.f.ClientConfig()
-			// if err != nil {
-			// 	return err
-			// }
-
-			// do we need something explicit for the input version or is this taken care of somewhere else?
-
-			err = createAndRefresh(info)
-			if err != nil {
-				objLog.Info("error creating object")
-				return err
-			}
-
-			objLog.Info("importing")
-			// a.importedObjects = append(a.importedObjects, object)
-		} else {
-			objLog.Info("skipping")
-		}
-		return nil
-	})
-
-	if err != nil {
-		a.log.Error("error visiting objects", err)
-		return err
-	}
-
-	return nil
 }
 
 // scanProjectObjects iterates most objects in a project and determines if they should be exported.
@@ -465,96 +389,160 @@ func (a *Archiver) exportTemplate(obj runtime.Object) error {
 	return nil
 }
 
-// importTemplate takes .yaml file and creates a resultant object
-func (a *Archiver) importTemplate(yamlObject string) error {
-
-	a.log.Infoln("reading from YAML file")
-	// create runtime.Object
-
-	// append to objectsImported
-	// a.objectsImported = append(a.objectsImported, obj)
-	return nil
-}
-
-// Import a .yaml file and create the resources contained therein
-// TODO user role bindings so that same permissions get restored to project
+// Unarchive imports a template of the project and associated user metadata
+// String YAML input is currently being used for testing
 func (a *Archiver) Unarchive() error {
-	filenames := []string{fmt.Sprintf("%s.yaml", a.username)}
-	_, explicit, err := a.f.DefaultNamespace()
+
+	a.log.Info("beginning unarchival")
+
+	file, err := ioutil.ReadFile("user.yaml")
+	if err != nil {
+		log.Info("error reading file")
+	}
+
+	err = a.Import(string(file))
 	if err != nil {
 		return err
 	}
+	return nil
+}
 
-	// Create resource and Infos from .yaml template file
-	r := resource.NewBuilder(a.mapper, a.typer, resource.ClientMapperFunc(a.f.ClientForMapping),
+// createAndRefresh creates an object from input info and refreshes info with that object
+func createAndRefresh(info *resource.Info) error {
+	obj, err := resource.NewHelper(info.Client, info.Mapping).Create(info.Namespace, true, info.Object)
+	if err != nil {
+		return err
+	}
+	info.Refresh(obj, true)
+	return nil
+}
+
+// Import creates a new project and generates objects for the project based on a template, which is currently a YAML string
+// Import has additional functionality to correctly import Service Accounts and their ImagePullSecrets
+func (a *Archiver) Import(yamlInput string) error {
+	a.log.Info("beginning import")
+
+	reader := strings.NewReader(yamlInput)
+
+	// create the build
+	build := resource.NewBuilder(a.mapper, a.typer, resource.ClientMapperFunc(a.f.ClientForMapping),
 		kapi.Codecs.UniversalDecoder()).
-		FilenameParam(explicit, &resource.FilenameOptions{Recursive: false, Filenames: filenames}).
-		Flatten().
-		Do()
+		ContinueOnError().
+		NamespaceParam(a.namespace).DefaultNamespace().AllNamespaces(false).
+		Flatten()
+	a.log.Info("build created")
 
-	// Visit each Info from template and create corresponding resource
-	err = r.Visit(func(info *resource.Info, err error) error {
+	// complete the build with the YAML string
+	completeBuild := build.Stream(reader, "error building from YAML")
+	a.log.Info("build completed from YAML")
+
+	// create visitors for each resource
+	err := completeBuild.Do().Visit(func(info *resource.Info, err error) error {
 		if err != nil {
 			return err
 		}
+		objLog := a.log.WithFields(log.Fields{
+			"object": fmt.Sprintf("%s/%s", a.ObjKind(info.Object), info.Name),
+		})
 
-		// Resources should be created under project namespace
-		switch info.ResourceMapping().Resource {
-		case "projects":
-			// Check if project is being created in original namespace or a new one
-			if a.namespace == "" {
-				a.namespace = info.Name
-			} else {
-				info.Object.(*projectapi.Project).ObjectMeta.Name = a.namespace
-			}
-			a.log.Infoln("Unarchiving: %s/%s in namespace %s", info.ResourceMapping().Resource, info.Name, a.namespace)
-			obj, err := resource.NewHelper(info.Client, info.Mapping).Create(a.namespace, true, info.Object)
+		// check for transient objects on import as a secondary check
+		if info.ResourceMapping().Resource != "pods" && info.ResourceMapping().Resource != "replicationcontrollers" {
+			if info.ResourceMapping().Resource == "serviceaccounts" {
 
-			// Add default service account role bindings to newly-created project
-			for _, binding := range bootstrappolicy.GetBootstrapServiceAccountProjectRoleBindings(a.namespace) {
-				addRole := &policy.RoleModificationOptions{
-					RoleName:      binding.RoleRef.Name,
-					RoleNamespace: binding.RoleRef.Namespace,
-					// TODO: try to eliminate oc use here, it's the last one.
-					RoleBindingAccessor: policy.NewLocalRoleBindingAccessor(a.namespace, a.oc),
-					Subjects:            binding.Subjects,
-				}
-				if err := addRole.AddRole(); err != nil {
-					fmt.Printf("Could not add service accounts to the %v role: %v\n", binding.RoleRef.Name, err)
+				a.log.Info("service account detected: ", info.Name)
+				// pass in the current object being visited into scanServiceAccountsForImport
+				err = a.scanServiceAccountsForImport(info)
+				if err != nil {
+					objLog.Info("error when scanning for service account")
 					return err
 				}
+			} else { // NOT a Service Account
+
+				err = createAndRefresh(info)
+				if err != nil {
+					objLog.Info("error creating object")
+					return err
+				}
+				a.objectsImported = append(a.objectsImported, info.Object)
+				objLog.Info("importing")
 			}
-			if err != nil {
-				return err
-			}
-			info.Refresh(obj, true)
-		case "users":
-			a.log.Infoln("Unarchiving: %s/%s in namespace %s", info.ResourceMapping().Resource, info.Name, a.namespace)
-			obj, err := resource.NewHelper(info.Client, info.Mapping).Create(a.namespace, true, info.Object)
-			if err != nil {
-				return err
-			}
-			info.Refresh(obj, true)
-			_, err = a.uidmc.Create(&userapi.UserIdentityMapping{
-				User:     kapi.ObjectReference{Name: a.username},
-				Identity: kapi.ObjectReference{Name: "anypassword:" + a.username},
-			})
-			if err != nil {
-				return err
-			}
-			info.Refresh(obj, true)
-		default:
-			a.log.Infoln("Unarchiving: %s/%s in namespace %s", info.ResourceMapping().Resource, info.Name, a.namespace)
-			obj, err := resource.NewHelper(info.Client, info.Mapping).Create(a.namespace, true, info.Object)
-			if err != nil {
-				return err
-			}
-			info.Refresh(obj, true)
+		} else { // a pod or replicationcontroller
+			objLog.Info("skipping")
 		}
 		return nil
 	})
+
+	if err != nil {
+		a.log.Error("error visiting objects", err)
+		return err
+	}
+	return nil
+}
+
+// scanServiceAccountsForImport scans for an already existing Service Account and if the current Service Account
+// matches an existing Service Account, the function adds imagePullSecrets if any exist
+// pass in the current object being visited, which has already been identified as a Service Account
+func (a *Archiver) scanServiceAccountsForImport(info *resource.Info) error {
+
+	// version the incoming resource
+	clientConfig, err := a.f.ClientConfig()
 	if err != nil {
 		return err
+	}
+	outputVersion := *clientConfig.GroupVersion
+	object, err := resource.AsVersionedObject([]*resource.Info{info}, false, outputVersion, kapi.Codecs.LegacyCodec(outputVersion))
+	if err != nil {
+		return err
+	}
+	saObject := object.(*kapiv1.ServiceAccount)
+
+	sas, err := a.kc.CoreV1().ServiceAccounts(a.namespace).List(metav1.ListOptions{})
+	if err != nil {
+		a.log.Error("error finding service accounts", err)
+		return err
+	}
+	a.log.Debugf("found %d service accounts", len(sas.Items))
+
+	for i := range sas.Items {
+		// Need to use the index here as we must use the pointer to use as a runtime.Object
+		s := sas.Items[i]
+		if saObject.Name == s.Name { // Service Account, s, already exists
+
+			imgPullSecrets := []kapiv1.LocalObjectReference{}
+			for _, r := range saObject.ImagePullSecrets {
+				imgPullSecrets = append(s.ImagePullSecrets, r)
+				a.log.Info("adding secret: ", r, "to current service account: ", saObject.Name)
+			}
+			s.ImagePullSecrets = imgPullSecrets
+
+			_, err = a.kc.CoreV1().ServiceAccounts(a.namespace).Update(&s)
+			if err != nil {
+				a.log.Errorln("error updating existing service account: %s", err)
+			}
+		}
+	}
+
+	match := false
+	for i := range sas.Items {
+		// Need to use the index here as we must use the pointer to use as a runtime.Object
+		s := sas.Items[i]
+
+		// if the incoming object, saObject, does not match ANY of the current SA objects, create a new SA
+		if saObject.Name == s.Name {
+			match = true
+		}
+	}
+	a.log.Info("match: ", match)
+
+	if match == false { // Service Account does NOT already exist
+		a.log.Info("service account does NOT already exist: ", saObject.Name)
+		err = createAndRefresh(info)
+		if err != nil {
+			a.log.Info("error creating object")
+			return err
+		}
+		a.objectsImported = append(a.objectsImported, info.Object)
+		a.log.Info("importing")
 	}
 	return nil
 }
