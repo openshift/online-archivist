@@ -1,35 +1,10 @@
 apiVersion: v1
 items:
 - apiVersion: v1
-  kind: Project
-  metadata:
-    annotations:
-      openshift.io/display-name: ""
-      openshift.io/sa.scc.mcs: s0:c8,c2
-      openshift.io/sa.scc.supplemental-groups: 1000060000/10000
-      openshift.io/sa.scc.uid-range: 1000060000/10000
-    creationTimestamp: 2017-07-19T13:16:14Z
-    name: project
-    namespace: exporttest-8536
-    resourceVersion: "1339"
-    selfLink: /oapi/v1/projects/exporttest-8536
-    uid: 71010d8e-6c84-11e7-b8d0-54ee7586bd49
-  spec:
-    finalizers:
-    - openshift.io/origin
-    - kubernetes
-  status:
-    phase: Active
-- apiVersion: v1
   kind: BuildConfig
   metadata:
-    creationTimestamp: 2017-07-19T13:16:14Z
-    generateName: mybc
-    name: mybcwdh2f
-    # namespace: exporttest-8536
-    resourceVersion: "1340"
-    selfLink: /oapi/v1/namespaces/exporttest-8536/buildconfigs/mybcwdh2f
-    uid: 7104183c-6c84-11e7-b8d0-54ee7586bd49
+    creationTimestamp: null
+    name: testbc
   spec:
     nodeSelector: null
     output: {}
@@ -47,15 +22,43 @@ items:
   status:
     lastVersion: 0
 - apiVersion: v1
+  kind: ImageStream
+  metadata:
+    creationTimestamp: null
+    generation: 1
+    name: integratedregistry
+  spec:
+    lookupPolicy:
+      local: false
+  status:
+    dockerImageRepository: 172.30.1.1:5000/exporttest-2374/integratedregistry
+- apiVersion: v1
+  kind: ImageStream
+  metadata:
+    creationTimestamp: null
+    generation: 1
+    name: postgresql
+  spec:
+    lookupPolicy:
+      local: false
+    tags:
+    - annotations: null
+      from:
+        kind: DockerImage
+        name: centos/postgresql-95-centos7
+      generation: 1
+      importPolicy: {}
+      name: "9.5"
+      referencePolicy:
+        type: Source
+  status:
+    dockerImageRepository: 172.30.1.1:5000/exporttest-2374/postgresql
+- apiVersion: v1
   kind: DeploymentConfig
   metadata:
-    creationTimestamp: 2017-07-19T13:16:14Z
+    creationTimestamp: null
     generation: 2
-    name: config
-    # namespace: exporttest-8536
-    resourceVersion: "1361"
-    selfLink: /oapi/v1/namespaces/exporttest-8536/deploymentconfigs/config
-    uid: 71092cd8-6c84-11e7-b8d0-54ee7586bd49
+    name: testdc
   spec:
     replicas: 1
     selector:
@@ -99,14 +102,14 @@ items:
   status:
     availableReplicas: 0
     conditions:
-    - lastTransitionTime: 2017-07-19T13:16:14Z
-      lastUpdateTime: 2017-07-19T13:16:14Z
+    - lastTransitionTime: 2017-08-08T17:01:12Z
+      lastUpdateTime: 2017-08-08T17:01:12Z
       message: Deployment config does not have minimum availability.
       status: "False"
       type: Available
-    - lastTransitionTime: 2017-07-19T13:16:14Z
-      lastUpdateTime: 2017-07-19T13:16:14Z
-      message: Created new replication controller "config-1" for version 1
+    - lastTransitionTime: 2017-08-08T17:01:12Z
+      lastUpdateTime: 2017-08-08T17:01:12Z
+      message: Created new replication controller "testdc-1" for version 1
       reason: NewReplicationControllerCreated
       status: "True"
       type: Progressing
@@ -119,5 +122,56 @@ items:
     replicas: 0
     unavailableReplicas: 0
     updatedReplicas: 0
+- apiVersion: v1
+  data:
+    .dockercfg: eyJodHRwczovL2luZGV4LmRvY2tlci5pby92MS8iOnsiYXV0aCI6ICJabTl2T21KaGNnbz0iLCAiZW1haWwiOiAiIn19
+  kind: Secret
+  metadata:
+    creationTimestamp: null
+    name: dockerbuildsecret
+  type: kubernetes.io/dockercfg
+- apiVersion: v1
+  data:
+    bar: YmFy
+    foo: Zm9v
+  kind: Secret
+  metadata:
+    creationTimestamp: null
+    name: testsecret
+  type: Opaque
+- apiVersion: v1
+  imagePullSecrets:
+  - name: dockerbuildsecret
+  kind: ServiceAccount
+  metadata:
+    creationTimestamp: null
+    name: builder
+  secrets:
+  - name: builder-token-kpgsc
+  - name: builder-dockercfg-n7l7l
+- apiVersion: v1
+  kind: ServiceAccount
+  metadata:
+    creationTimestamp: null
+    name: default
+  secrets:
+  - name: default-token-d9m62
+  - name: default-dockercfg-tkdpr
+- apiVersion: v1
+  kind: ServiceAccount
+  metadata:
+    creationTimestamp: null
+    name: deployer
+  secrets:
+  - name: deployer-token-47tk8
+  - name: deployer-dockercfg-n319n
+- apiVersion: v1
+  kind: ServiceAccount
+  metadata:
+    creationTimestamp: null
+    name: testserviceaccount
+  secrets:
+  - name: testserviceaccount-token-fmxrc
+  - name: testserviceaccount-dockercfg-1l7mf
 kind: List
 metadata: {}

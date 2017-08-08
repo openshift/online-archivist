@@ -18,7 +18,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	kapi "k8s.io/kubernetes/pkg/api"
 	kapiv1 "k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/printers"
 )
@@ -107,9 +106,10 @@ func testExport(t *testing.T, h *testHarness) {
 
 	a := archive.NewArchiver(h.pc, h.ac, h.uc, h.uidmc, h.idc,
 		h.clientFactory, h.oc, h.kc, pn, "user")
-	objList, err := a.Export()
-	logAll(tlog, a, objList)
+	list, err := a.Export()
 	gm.Expect(err).NotTo(gm.HaveOccurred())
+	objList := list.(*kapiv1.List)
+	logAll(tlog, a, objList)
 
 	t.Run("ExpectedObjectsFound", func(t *testing.T) {
 		gm.RegisterTestingT(t)
@@ -131,7 +131,7 @@ func testExport(t *testing.T, h *testHarness) {
 		p := printers.YAMLPrinter{}
 		for _, obj := range objList.Items {
 			buf := new(bytes.Buffer)
-			err = p.PrintObj(obj, buf)
+			err = p.PrintObj(obj.Object, buf)
 			if err != nil {
 				gm.Expect(err).NotTo(gm.BeNil())
 			}
@@ -146,7 +146,7 @@ func testExport(t *testing.T, h *testHarness) {
 	t.Run("ExportedObjectsHaveClusterMetadataStripped", func(t *testing.T) {
 		gm.RegisterTestingT(t)
 		for _, obj := range objList.Items {
-			accessor, err := meta.Accessor(obj)
+			accessor, err := meta.Accessor(obj.Object)
 			gm.Expect(err).NotTo(gm.HaveOccurred())
 			gm.Expect(accessor.GetUID()).To(gm.BeZero(), "%s has UID set", accessor.GetName())
 			gm.Expect(accessor.GetNamespace()).To(gm.BeZero(), "%s has namespace set", accessor.GetName())
@@ -167,8 +167,9 @@ func testExport(t *testing.T, h *testHarness) {
 }
 
 // findObj finds an object of the given kind and name. If not found it will return nil.
-func findObj(t *testing.T, a *archive.Archiver, list *kapi.List, kind string, name string) runtime.Object {
-	for _, o := range list.Items {
+func findObj(t *testing.T, a *archive.Archiver, list *kapiv1.List, kind string, name string) runtime.Object {
+	for _, ro := range list.Items {
+		o := ro.Object
 		if md, err := metav1.ObjectMetaFor(o); err == nil {
 			if a.ObjKind(o) == kind && md.Name == name {
 				return o
@@ -181,11 +182,11 @@ func findObj(t *testing.T, a *archive.Archiver, list *kapi.List, kind string, na
 	return nil
 }
 
-func logAll(tlog *log.Entry, a *archive.Archiver, list *kapi.List) {
+func logAll(tlog *log.Entry, a *archive.Archiver, list *kapiv1.List) {
 	tlog.Infoln("object list:")
 	for _, o := range list.Items {
-		if md, err := metav1.ObjectMetaFor(o); err == nil {
-			tlog.Infof("   %s/%s", a.ObjKind(o), md.Name)
+		if md, err := metav1.ObjectMetaFor(o.Object); err == nil {
+			tlog.Infof("   %s/%s", a.ObjKind(o.Object), md.Name)
 		} else {
 			tlog.Errorf("error loading ObjectMeta for: %s", o)
 		}
