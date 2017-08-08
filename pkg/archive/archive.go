@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/openshift/online/archivist/pkg/util"
+	"github.com/openshift/online-archivist/pkg/util"
 
 	authclientset "github.com/openshift/origin/pkg/authorization/generated/clientset"
 	osclient "github.com/openshift/origin/pkg/client"
@@ -184,6 +184,13 @@ func (a *Archiver) scanProjectObjects() error {
 			if err != nil {
 				return err
 			}
+
+			if info.ResourceMapping().Resource == "services" {
+				svc := object.(*kapiv1.Service)
+				// Must strip the cluster IP from exported service.
+				svc.Spec.ClusterIP = ""
+			}
+
 			objLog.Info("exporting")
 			a.objectsToExport = append(a.objectsToExport, object)
 		} else {
@@ -367,7 +374,8 @@ func (a *Archiver) Archive() (string, error) {
 	// Finally delete the project. Note that this may take some time but the project
 	// should be marked as in Terminating status much more quickly. This will cleanup
 	// most objects we're concerned about.
-	a.pc.ProjectV1().Projects().Delete(a.namespace, &metav1.DeleteOptions{})
+	// TODO: re-enable
+	//a.pc.ProjectV1().Projects().Delete(a.namespace, &metav1.DeleteOptions{})
 
 	return yamlStr, nil
 }
