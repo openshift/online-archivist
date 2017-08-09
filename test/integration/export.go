@@ -13,6 +13,7 @@ import (
 
 	"github.com/openshift/online-archivist/pkg/archive"
 
+	imagev1 "github.com/openshift/origin/pkg/image/apis/image/v1"
 	projectv1 "github.com/openshift/origin/pkg/project/apis/project/v1"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -88,7 +89,7 @@ func testExport(t *testing.T, h *testHarness) {
 	// We do not expect to see this in the results:
 	h.createBuild(t, pn)
 	h.createSvcAccount(t, pn, "testserviceaccount")
-	h.createRegistryImageStream(t, pn, "integratedregistry")
+	h.createRegistryImageStream(t, pn, "localimg")
 	h.createExternalImageStream(t, pn, "postgresql")
 	h.createService(t, pn, "testservice")
 
@@ -101,7 +102,7 @@ func testExport(t *testing.T, h *testHarness) {
 		"ServiceAccount/builder",
 		"ServiceAccount/deployer",
 		"ServiceAccount/default",
-		"ImageStream/integratedregistry",
+		"ImageStream/localimg",
 		"ImageStream/postgresql",
 		"Service/testservice",
 	}
@@ -173,6 +174,19 @@ func testExport(t *testing.T, h *testHarness) {
 		eso := so.(*kapiv1.Service)
 		gm.Expect(len(eso.Spec.ClusterIP)).Should(gm.BeZero())
 		gm.Expect(eso.Spec.ClusterIP).To(gm.Equal(""), "cluster IP is not empty")
+	})
+
+	t.Run("ExportedImageStreamsHaveNoStatus", func(t *testing.T) {
+		gm.RegisterTestingT(t)
+		imgStreamObj := findObj(t, a, objList, "ImageStream", "localimg")
+		is := imgStreamObj.(*imagev1.ImageStream)
+		gm.Expect(is.Status.DockerImageRepository).To(gm.BeZero())
+		gm.Expect(len(is.Status.Tags)).To(gm.Equal(0))
+
+		imgStreamObj = findObj(t, a, objList, "ImageStream", "postgresql")
+		is = imgStreamObj.(*imagev1.ImageStream)
+		gm.Expect(is.Status.DockerImageRepository).To(gm.BeZero())
+		gm.Expect(len(is.Status.Tags)).To(gm.Equal(0))
 	})
 }
 

@@ -242,6 +242,19 @@ func (h *testHarness) createExternalImageStream(t *testing.T, projectName string
 				},
 			},
 		},
+		Status: imagev1.ImageStreamStatus{
+			Tags: []imagev1.NamedTagEventList{
+				{
+					Tag: "latest",
+					Items: []imagev1.TagEvent{
+						{
+							Image: "the-image-id",
+						},
+					},
+				},
+			},
+			DockerImageRepository: "example/ruby:latest",
+		},
 	}
 	var err error
 	is, err = h.imageClient.ImageV1().ImageStreams(projectName).Create(is)

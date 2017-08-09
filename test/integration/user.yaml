@@ -26,7 +26,7 @@ items:
   metadata:
     creationTimestamp: null
     generation: 1
-    name: integratedregistry
+    name: localimg
   spec:
     lookupPolicy:
       local: false
@@ -107,6 +107,21 @@ items:
     unavailableReplicas: 0
     updatedReplicas: 0
 - apiVersion: v1
+  kind: Service
+  metadata:
+    creationTimestamp: null
+    name: testservice
+  spec:
+    ports:
+    - name: 8080-tcp
+      port: 8080
+      protocol: TCP
+      targetPort: 8080
+    sessionAffinity: None
+    type: ClusterIP
+  status:
+    loadBalancer: {}
+- apiVersion: v1
   data:
     .dockercfg: eyJodHRwczovL2luZGV4LmRvY2tlci5pby92MS8iOnsiYXV0aCI6ICJabTl2T21KaGNnbz0iLCAiZW1haWwiOiAiIn19
   kind: Secret
@@ -131,31 +146,31 @@ items:
     creationTimestamp: null
     name: builder
   secrets:
-  - name: builder-token-18xzt
-  - name: builder-dockercfg-971w2
+  - name: builder-token-j4xdt
+  - name: builder-dockercfg-2pft8
 - apiVersion: v1
   kind: ServiceAccount
   metadata:
     creationTimestamp: null
     name: default
   secrets:
-  - name: default-token-69k6n
-  - name: default-dockercfg-br5p7
+  - name: default-token-vbxkk
+  - name: default-dockercfg-xvqzz
 - apiVersion: v1
   kind: ServiceAccount
   metadata:
     creationTimestamp: null
     name: deployer
   secrets:
-  - name: deployer-token-796df
-  - name: deployer-dockercfg-br8vb
+  - name: deployer-token-3j9k1
+  - name: deployer-dockercfg-m0rt0
 - apiVersion: v1
   kind: ServiceAccount
   metadata:
     creationTimestamp: null
     name: testserviceaccount
   secrets:
-  - name: testserviceaccount-token-zqgdg
-  - name: testserviceaccount-dockercfg-phfft
+  - name: testserviceaccount-token-8fzdk
+  - name: testserviceaccount-dockercfg-swfs2
 kind: List
 metadata: {}
