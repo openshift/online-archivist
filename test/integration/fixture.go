@@ -282,7 +282,6 @@ func serviceSpec() kapiv1.ServiceSpec {
 				Name:     "8080-tcp",
 				Port:     8080,
 				Protocol: "TCP",
-				// TargetPort: intstr.IntOrString(8080),
 			},
 		},
 	}

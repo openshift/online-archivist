@@ -171,8 +171,8 @@ func testExport(t *testing.T, h *testHarness) {
 		gm.RegisterTestingT(t)
 		so := findObj(t, a, objList, "Service", "testservice")
 		eso := so.(*kapiv1.Service)
-		gm.Expect(len(eso.Spec.ClusterIP)).To(gm.Equal(0))
-		gm.Expect(eso.Spec.ClusterIP).To(gm.Equal(""), "cluster is is not empty")
+		gm.Expect(len(eso.Spec.ClusterIP)).Should(gm.BeZero())
+		gm.Expect(eso.Spec.ClusterIP).To(gm.Equal(""), "cluster IP is not empty")
 	})
 }
 
