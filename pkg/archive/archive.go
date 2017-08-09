@@ -11,6 +11,7 @@ import (
 
 	authclientset "github.com/openshift/origin/pkg/authorization/generated/clientset"
 	osclient "github.com/openshift/origin/pkg/client"
+	"github.com/openshift/origin/pkg/cmd/cli/cmd"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
 	projectclientset "github.com/openshift/origin/pkg/project/generated/clientset"
 	userclientset "github.com/openshift/origin/pkg/user/generated/clientset"
@@ -40,6 +41,7 @@ type Archiver struct {
 
 	oc              osclient.Interface
 	kc              kclientset.Interface
+	exporter        cmd.Exporter
 	f               *clientcmd.Factory
 	mapper          meta.RESTMapper
 	typer           runtime.ObjectTyper
@@ -67,6 +69,11 @@ func NewArchiver(
 		"user":      username,
 	})
 	mapper, typer := f.Object()
+
+	// Re-using Origin exporter logic until the bugs in upstream kube are fixed:
+	// https://github.com/kubernetes/kubernetes/issues/49497
+	exporter := &cmd.DefaultExporter{}
+
 	return &Archiver{
 		pc: projectClient,
 		ac: authClient,
@@ -84,9 +91,10 @@ func NewArchiver(
 		objectsToExport: []runtime.Object{},
 		objectsImported: []runtime.Object{},
 
-		mapper: mapper,
-		typer:  typer,
-		log:    aLog,
+		exporter: exporter,
+		mapper:   mapper,
+		typer:    typer,
+		log:      aLog,
 	}
 }
 
@@ -168,7 +176,7 @@ func (a *Archiver) scanProjectObjects() error {
 		objLog := a.log.WithFields(log.Fields{
 			"object": fmt.Sprintf("%s/%s", a.ObjKind(info.Object), info.Name),
 		})
-		a.stripObjectMeta(info.Object)
+		a.exporter.Export(info.Object, false)
 		// We do not want to archive transient objects such as pods or replication controllers:
 		if info.ResourceMapping().Resource != "pods" &&
 			info.ResourceMapping().Resource != "replicationcontrollers" &&
@@ -201,28 +209,6 @@ func (a *Archiver) scanProjectObjects() error {
 
 	if err != nil {
 		a.log.Error("error visiting objects", err)
-		return err
-	}
-	return nil
-}
-
-// stripObjectMeta removes object metadata that should not be present in an export as it ties
-// it to a particular namespace and/or cluster. This closely matches the exportObjectMeta func
-// that can be found in Kubernetes and would normally do this for us, but the export functionality
-// there has a number of bugs that are in the process of being fixed. For now we encapsulate hacks
-// around these bugs in this method.
-func (a *Archiver) stripObjectMeta(obj runtime.Object) error {
-	if accessor, err := meta.Accessor(obj); err == nil {
-		accessor.SetUID("")
-		accessor.SetNamespace("")
-		accessor.SetCreationTimestamp(metav1.Time{})
-		accessor.SetDeletionTimestamp(nil)
-		accessor.SetResourceVersion("")
-		accessor.SetSelfLink("")
-		if len(accessor.GetGenerateName()) > 0 {
-			accessor.SetName("")
-		}
-	} else {
 		return err
 	}
 	return nil
@@ -320,7 +306,10 @@ func (a *Archiver) versionAndAppendObject(obj runtime.Object) error {
 	if err != nil {
 		return err
 	}
-	a.stripObjectMeta(obj)
+	err = a.exporter.Export(obj, false)
+	if err != nil {
+		return err
+	}
 	outputVersion := *clientConfig.GroupVersion
 	vObj, err := resource.TryConvert(kapi.Scheme, obj, outputVersion)
 	if err != nil {

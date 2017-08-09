@@ -31,7 +31,7 @@ items:
     lookupPolicy:
       local: false
   status:
-    dockerImageRepository: 172.30.1.1:5000/exporttest-2374/integratedregistry
+    dockerImageRepository: ""
 - apiVersion: v1
   kind: ImageStream
   metadata:
@@ -52,12 +52,12 @@ items:
       referencePolicy:
         type: Source
   status:
-    dockerImageRepository: 172.30.1.1:5000/exporttest-2374/postgresql
+    dockerImageRepository: ""
 - apiVersion: v1
   kind: DeploymentConfig
   metadata:
     creationTimestamp: null
-    generation: 2
+    generation: 1
     name: testdc
   spec:
     replicas: 1
@@ -101,24 +101,8 @@ items:
     - type: ConfigChange
   status:
     availableReplicas: 0
-    conditions:
-    - lastTransitionTime: 2017-08-08T17:01:12Z
-      lastUpdateTime: 2017-08-08T17:01:12Z
-      message: Deployment config does not have minimum availability.
-      status: "False"
-      type: Available
-    - lastTransitionTime: 2017-08-08T17:01:12Z
-      lastUpdateTime: 2017-08-08T17:01:12Z
-      message: Created new replication controller "testdc-1" for version 1
-      reason: NewReplicationControllerCreated
-      status: "True"
-      type: Progressing
-    details:
-      causes:
-      - type: ConfigChange
-      message: config change
-    latestVersion: 1
-    observedGeneration: 2
+    latestVersion: 0
+    observedGeneration: 0
     replicas: 0
     unavailableReplicas: 0
     updatedReplicas: 0
@@ -147,31 +131,31 @@ items:
     creationTimestamp: null
     name: builder
   secrets:
-  - name: builder-token-kpgsc
-  - name: builder-dockercfg-n7l7l
+  - name: builder-token-18xzt
+  - name: builder-dockercfg-971w2
 - apiVersion: v1
   kind: ServiceAccount
   metadata:
     creationTimestamp: null
     name: default
   secrets:
-  - name: default-token-d9m62
-  - name: default-dockercfg-tkdpr
+  - name: default-token-69k6n
+  - name: default-dockercfg-br5p7
 - apiVersion: v1
   kind: ServiceAccount
   metadata:
     creationTimestamp: null
     name: deployer
   secrets:
-  - name: deployer-token-47tk8
-  - name: deployer-dockercfg-n319n
+  - name: deployer-token-796df
+  - name: deployer-dockercfg-br8vb
 - apiVersion: v1
   kind: ServiceAccount
   metadata:
     creationTimestamp: null
     name: testserviceaccount
   secrets:
-  - name: testserviceaccount-token-fmxrc
-  - name: testserviceaccount-dockercfg-1l7mf
+  - name: testserviceaccount-token-zqgdg
+  - name: testserviceaccount-dockercfg-phfft
 kind: List
 metadata: {}
