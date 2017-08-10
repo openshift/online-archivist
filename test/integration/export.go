@@ -12,13 +12,13 @@ import (
 	gm "github.com/onsi/gomega"
 
 	"github.com/openshift/online-archivist/pkg/archive"
+	"github.com/openshift/online-archivist/pkg/util"
 
 	imagev1 "github.com/openshift/origin/pkg/image/apis/image/v1"
 	projectv1 "github.com/openshift/origin/pkg/project/apis/project/v1"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	kapiv1 "k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/printers"
 )
@@ -74,7 +74,7 @@ func testExport(t *testing.T, h *testHarness) {
 
 	// Add the build secret to the default builder SA. Note that these service accounts may take
 	// a few seconds to appear after the project is created.
-	err := retry(10, 500*time.Millisecond, tlog, func() (err error) {
+	err := util.Retry(10, 500*time.Millisecond, tlog, func() (err error) {
 		bsa, err := h.kc.CoreV1().ServiceAccounts(pn).Get("builder", metav1.GetOptions{})
 		if err != nil {
 			return
@@ -198,7 +198,7 @@ func testExport(t *testing.T, h *testHarness) {
 
 	// Wait for project deletion to complete, can rountinely take >20s.
 	tlog.Info("waiting for project termination to complete")
-	err = retry(12, 5*time.Second, tlog, func() (err error) {
+	err = util.Retry(12, 5*time.Second, tlog, func() (err error) {
 		proj, err := h.pc.ProjectV1().Projects().Get(pn, metav1.GetOptions{})
 		// No error indicates project still exists, so return an error. (yes this is weird I know)
 		if err == nil {
@@ -229,22 +229,16 @@ func testExport(t *testing.T, h *testHarness) {
 		// i.e. check expected objects exist, check imgPullSecrets made it onto the default SA, etc.
 	})
 
-}
-
-// findObj finds an object of the given kind and name. If not found it will return nil.
-func findObj(t *testing.T, a *archive.Archiver, list *kapiv1.List, kind string, name string) runtime.Object {
-	for _, ro := range list.Items {
-		o := ro.Object
-		if md, err := metav1.ObjectMetaFor(o); err == nil {
-			if a.ObjKind(o) == kind && md.Name == name {
-				return o
-			}
-		} else {
-			t.Fatalf("error loading ObjectMeta for: %s", o)
-			return nil
+	t.Run("ImportedBuilderSAHasCustomDockercfgSecret", func(t *testing.T) {
+		gm.RegisterTestingT(t)
+		// look up build runtime.Object from the server here
+		// bsao := findObj(t, a, objList, "ServiceAccount", "builder")
+		bsa, err := h.kc.CoreV1().ServiceAccounts(pn).Get("builder", metav1.GetOptions{})
+		if err != nil {
+			gm.Expect(len(bsa.ImagePullSecrets)).To(gm.Equal(1))
+			gm.Expect(bsa.ImagePullSecrets[0].Name).To(gm.Equal("dockerbuildsecret"))
 		}
-	}
-	return nil
+	})
 }
 
 func logAll(tlog *log.Entry, a *archive.Archiver, list *kapiv1.List) {

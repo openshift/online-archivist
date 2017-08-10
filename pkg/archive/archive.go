@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/openshift/online-archivist/pkg/util"
 
@@ -47,6 +48,7 @@ type Archiver struct {
 	typer           runtime.ObjectTyper
 	objectsToExport []runtime.Object
 	objectsImported []runtime.Object //use for testing
+	projectObject   runtime.Object
 	namespace       string
 	log             *log.Entry
 	username        string
@@ -108,7 +110,7 @@ func (a *Archiver) Export() (runtime.Object, error) {
 		return nil, err
 	}
 
-	// Get all resources for this project and archive them. Using this kubectl resource infra
+	// Get all resources for this project and archive them, but keep the project. Using this kubectl resource infra
 	// allows us to list all objects generically, instead of hard coding a lookup for each API type
 	// and then having to constantly keep that up to date as more types are added.
 	a.log.Debugln("scanning objects in project")
@@ -159,7 +161,7 @@ func (a *Archiver) Export() (runtime.Object, error) {
 }
 
 // scanProjectObjects iterates most objects in a project and determines if they should be exported.
-// Some types are not included in this however and must be dealt with separately. (i.e. Secrets)
+// Some types are not included in this however and must be dealt with separately. (i.e. Secrets, Service Accounts)
 func (a *Archiver) scanProjectObjects() error {
 
 	// TODO: ExportParam is not actually hooked up server side for list operations yet but to:
@@ -176,7 +178,9 @@ func (a *Archiver) scanProjectObjects() error {
 		objLog := a.log.WithFields(log.Fields{
 			"object": fmt.Sprintf("%s/%s", a.ObjKind(info.Object), info.Name),
 		})
+
 		a.exporter.Export(info.Object, false)
+
 		// We do not want to archive transient objects such as pods or replication controllers:
 		if info.ResourceMapping().Resource != "pods" &&
 			info.ResourceMapping().Resource != "replicationcontrollers" &&
@@ -360,11 +364,8 @@ func (a *Archiver) Archive() (string, error) {
 	a.log.Debug("got yaml string from export")
 	a.log.Debug(yamlStr)
 
-	// Finally delete the project. Note that this may take some time but the project
-	// should be marked as in Terminating status much more quickly. This will cleanup
-	// most objects we're concerned about.
-	// TODO: re-enable
-	//a.pc.ProjectV1().Projects().Delete(a.namespace, &metav1.DeleteOptions{})
+	// Finally delete the project's associated resources, but not the project.
+	a.pc.ProjectV1().Projects().Delete(a.namespace, &metav1.DeleteOptions{})
 
 	return yamlStr, nil
 }
@@ -509,14 +510,23 @@ func (a *Archiver) scanServiceAccountsForImport(info *resource.Info) error {
 			imgPullSecrets := []kapiv1.LocalObjectReference{}
 			for _, r := range saObject.ImagePullSecrets {
 				imgPullSecrets = append(s.ImagePullSecrets, r)
-				a.log.Info("adding secret: ", r, "to current service account: ", saObject.Name)
+				saLog := a.log.WithFields(log.Fields{
+					"secret":          fmt.Sprintf("%s", r),
+					"service account": fmt.Sprintf("%s", saObject.Name),
+				})
+				saLog.Info("adding image pull secret to service account")
 			}
 			s.ImagePullSecrets = imgPullSecrets
 
-			_, err = a.kc.CoreV1().ServiceAccounts(a.namespace).Update(&s)
-			if err != nil {
-				a.log.Errorln("error updating existing service account: %s", err)
-			}
+			util.Retry(10, 1000*time.Millisecond, a.log, func() (err error) {
+				_, err = a.kc.CoreV1().ServiceAccounts(a.namespace).Update(&s)
+				if err != nil {
+					a.log.Errorln("error updating existing service account: %s", err)
+					// Do we consider this an import failure if this mismatch between resource version and update version exists?
+					// Is there anything else we can do here besides re-try or have the user attempt to import again?
+				}
+				return err
+			})
 		}
 	}
 
@@ -543,4 +553,24 @@ func (a *Archiver) scanServiceAccountsForImport(info *resource.Info) error {
 		a.log.Info("importing")
 	}
 	return nil
+}
+
+// GetImportedObjects returns a kapi List of imported objects
+func (a *Archiver) GetImportedObjects() runtime.Object {
+
+	template := &kapi.List{
+		ListMeta: metav1.ListMeta{},
+		Items:    a.objectsImported,
+	}
+
+	clientConfig, err := a.f.ClientConfig()
+	if err != nil {
+		return nil
+	}
+
+	var result runtime.Object
+	outputVersion := *clientConfig.GroupVersion
+	result, err = kapi.Scheme.ConvertToVersion(template, outputVersion)
+
+	return result
 }

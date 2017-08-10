@@ -1,12 +1,11 @@
 package integration
 
 import (
-	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/openshift/online-archivist/cmd"
+	"github.com/openshift/online-archivist/pkg/archive"
 
 	authclientset "github.com/openshift/origin/pkg/authorization/generated/clientset"
 	buildclientset "github.com/openshift/origin/pkg/build/generated/clientset"
@@ -23,11 +22,11 @@ import (
 	imagev1 "github.com/openshift/origin/pkg/image/apis/image/v1"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	restclient "k8s.io/client-go/rest"
 	kapiv1 "k8s.io/kubernetes/pkg/api/v1"
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/spf13/pflag"
 )
 
@@ -350,19 +349,18 @@ func podTemplateSpec() *kapiv1.PodTemplateSpec {
 	}
 }
 
-func retry(attempts int, sleep time.Duration, tlog *log.Entry, callback func() error) (err error) {
-	for i := 0; ; i++ {
-		err = callback()
-		if err == nil {
-			return
+// FindObj finds an object of the given kind and name. If not found it will return nil.
+func findObj(t *testing.T, a *archive.Archiver, list *kapiv1.List, kind string, name string) runtime.Object {
+	for _, ro := range list.Items {
+		o := ro.Object
+		if md, err := metav1.ObjectMetaFor(o); err == nil {
+			if a.ObjKind(o) == kind && md.Name == name {
+				return o
+			}
+		} else {
+			t.Fatalf("error loading ObjectMeta for: %s", o)
+			return nil
 		}
-
-		if i >= (attempts - 1) {
-			break
-		}
-
-		time.Sleep(sleep)
-		tlog.Warnf("retrying after error: %s attempt: %d/%d", err, i+1, attempts)
 	}
-	return fmt.Errorf("function failed after %d attempts, last error: %s", attempts, err)
+	return nil
 }
