@@ -329,7 +329,7 @@ func (a *Archiver) ObjKind(o runtime.Object) string {
 	return kinds[0].Kind
 }
 
-func serializeObjList(list runtime.Object) (string, error) {
+func SerializeObjList(list runtime.Object) (string, error) {
 	p := printers.YAMLPrinter{}
 	buf := new(bytes.Buffer)
 	err := p.PrintObj(list, buf)
@@ -352,7 +352,7 @@ func (a *Archiver) Archive() (string, error) {
 	}
 
 	// Serialize the objList to a string for return.
-	yamlStr, err := serializeObjList(objList)
+	yamlStr, err := SerializeObjList(objList)
 	if err != nil {
 		return "", err
 	}

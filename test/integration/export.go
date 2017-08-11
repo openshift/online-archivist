@@ -38,15 +38,7 @@ func testExportProjectDoesNotExist(t *testing.T, h *testHarness) {
 	gm.Expect(err.Error()).Should(gm.ContainSubstring("not found"))
 }
 
-func testExport(t *testing.T, h *testHarness) {
-	gm.RegisterTestingT(t)
-	pn := getTestProjectName("exporttest")
-	log.SetLevel(log.DebugLevel)
-	tlog := log.WithFields(log.Fields{
-		"namespace": pn,
-		"test":      "exporttest",
-	})
-
+func createTestProject(t *testing.T, h *testHarness, tlog *log.Entry, pn string) *projectv1.Project {
 	testProject := &projectv1.Project{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        pn,
@@ -60,6 +52,19 @@ func testExport(t *testing.T, h *testHarness) {
 		t.Fatal("error creating project:", err)
 	}
 	tlog.Info("created test project")
+	return testProject
+}
+
+func testExport(t *testing.T, h *testHarness) {
+	gm.RegisterTestingT(t)
+	pn := getTestProjectName("exporttest")
+	log.SetLevel(log.DebugLevel)
+	tlog := log.WithFields(log.Fields{
+		"namespace": pn,
+		"test":      "exporttest",
+	})
+
+	createTestProject(t, h, tlog, pn)
 	defer h.pc.ProjectV1().Projects().Delete(pn, &metav1.DeleteOptions{})
 
 	h.createDeploymentConfig(t, pn, "testdc")
@@ -69,7 +74,7 @@ func testExport(t *testing.T, h *testHarness) {
 
 	// Add the build secret to the default builder SA. Note that these service accounts may take
 	// a few seconds to appear after the project is created.
-	err = retry(10, 500*time.Millisecond, tlog, func() (err error) {
+	err := retry(10, 500*time.Millisecond, tlog, func() (err error) {
 		bsa, err := h.kc.CoreV1().ServiceAccounts(pn).Get("builder", metav1.GetOptions{})
 		if err != nil {
 			return
@@ -142,10 +147,6 @@ func testExport(t *testing.T, h *testHarness) {
 		}
 	})
 
-	// TODO: we may need more logic and testing around image streams, which should be exported and
-	// how well they work. However we need to get further with import to test how things behave.
-
-	// TODO: make sure cluster info is stripped from objects
 	t.Run("ExportedObjectsHaveClusterMetadataStripped", func(t *testing.T) {
 		gm.RegisterTestingT(t)
 		for _, obj := range objList.Items {
@@ -188,6 +189,46 @@ func testExport(t *testing.T, h *testHarness) {
 		gm.Expect(is.Status.DockerImageRepository).To(gm.BeZero())
 		gm.Expect(len(is.Status.Tags)).To(gm.Equal(0))
 	})
+
+	// At this point we want to proceed to import testing. Per our current target of
+	// first being able to import back into the same project name and cluster (leaving
+	// an empty project around after archival), we need to clean out the project.
+	// TODO: hookup project cleanup here, for now we'll just delete it entirely and recreate:
+	h.pc.ProjectV1().Projects().Delete(pn, &metav1.DeleteOptions{})
+
+	// Wait for project deletion to complete, can rountinely take >20s.
+	tlog.Info("waiting for project termination to complete")
+	err = retry(12, 5*time.Second, tlog, func() (err error) {
+		proj, err := h.pc.ProjectV1().Projects().Get(pn, metav1.GetOptions{})
+		// No error indicates project still exists, so return an error. (yes this is weird I know)
+		if err == nil {
+			return fmt.Errorf("project still exists, status: %v", proj.Status)
+		}
+		// Error returned, should indicate project no longer exists:
+		tlog.Info("project lookup error should indicate project on longer exists: %s", err)
+		return nil
+	})
+	gm.Expect(err).NotTo(gm.HaveOccurred())
+
+	// Now recreate the project with the same name. Deletion already deferred before.
+	createTestProject(t, h, tlog, pn)
+
+	t.Run("ImportIntoSameProject", func(t *testing.T) {
+		// Proceed to run import tests using the data exported above:
+		gm.RegisterTestingT(t)
+
+		a := archive.NewArchiver(h.pc, h.ac, h.uc, h.uidmc, h.idc,
+			h.clientFactory, h.oc, h.kc, pn, "user")
+
+		yamlStr, err := archive.SerializeObjList(objList)
+		gm.Expect(err).NotTo(gm.HaveOccurred())
+		err = a.Import(yamlStr)
+		gm.Expect(err).NotTo(gm.HaveOccurred())
+
+		// TODO: add subtests here to validate all the things, just checking error above is not sufficient.
+		// i.e. check expected objects exist, check imgPullSecrets made it onto the default SA, etc.
+	})
+
 }
 
 // findObj finds an object of the given kind and name. If not found it will return nil.

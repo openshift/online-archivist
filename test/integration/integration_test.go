@@ -14,7 +14,6 @@ import (
 func TestIntegration(t *testing.T) {
 	h := newTestHarness(t)
 
-	t.Run("ExportSimple", func(t *testing.T) { testExport(t, h) })
 	t.Run("ExportProjectDoesNotExist", func(t *testing.T) { testExportProjectDoesNotExist(t, h) })
-	t.Run("ImportSimple", func(t *testing.T) { testImportViaStream(t, h) })
+	t.Run("ExportSimple", func(t *testing.T) { testExport(t, h) })
 }
