@@ -1,27 +1,27 @@
 package clustermonitor
 
 import (
-	"errors"
 	"fmt"
-	"github.com/openshift/online/archivist/pkg/config"
 	"sort"
 	"time"
 
+	"github.com/openshift/online-archivist/pkg/config"
+	"github.com/openshift/online-archivist/pkg/util"
+
 	oclient "github.com/openshift/origin/pkg/client"
 
-	buildapi "github.com/openshift/origin/pkg/build/api"
-	buildclient "github.com/openshift/origin/pkg/build/client/clientset_generated/internalclientset/typed/core/internalversion"
+	buildapi "github.com/openshift/origin/pkg/build/apis/build"
 
 	// Prevents "no kind registered for version" even with generated clientset use
 	// TODO: This shouldn't be required, may not be doing something correctly.
-	_ "github.com/openshift/origin/pkg/build/api/install"
+	//_ "github.com/openshift/origin/pkg/build/api/install"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/watch"
+	kcache "k8s.io/client-go/tools/cache"
 	kapi "k8s.io/kubernetes/pkg/api"
-	kcache "k8s.io/kubernetes/pkg/client/cache"
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/wait"
-	"k8s.io/kubernetes/pkg/watch"
 
 	log "github.com/Sirupsen/logrus"
 )
@@ -29,15 +29,14 @@ import (
 const logComponent = "clustermonitor"
 
 func NewClusterMonitor(archivistConfig config.ArchivistConfig, clusterConfig config.ClusterConfig,
-	oc oclient.Interface, kc kclientset.Interface,
-	bc buildclient.CoreInterface) *ClusterMonitor {
+	oc oclient.Interface, kc kclientset.Interface) *ClusterMonitor {
 
 	buildLW := &kcache.ListWatch{
-		ListFunc: func(options kapi.ListOptions) (runtime.Object, error) {
-			return bc.Builds(kapi.NamespaceAll).List(options)
+		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
+			return oc.Builds(kapi.NamespaceAll).List(options)
 		},
-		WatchFunc: func(options kapi.ListOptions) (watch.Interface, error) {
-			return bc.Builds(kapi.NamespaceAll).Watch(options)
+		WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
+			return oc.Builds(kapi.NamespaceAll).Watch(options)
 		},
 	}
 
@@ -54,10 +53,10 @@ func NewClusterMonitor(archivistConfig config.ArchivistConfig, clusterConfig con
 	)
 
 	rcLW := &kcache.ListWatch{
-		ListFunc: func(options kapi.ListOptions) (runtime.Object, error) {
+		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
 			return kc.Core().ReplicationControllers(kapi.NamespaceAll).List(options)
 		},
-		WatchFunc: func(options kapi.ListOptions) (watch.Interface, error) {
+		WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
 			return kc.Core().ReplicationControllers(kapi.NamespaceAll).Watch(options)
 		},
 	}
@@ -72,10 +71,10 @@ func NewClusterMonitor(archivistConfig config.ArchivistConfig, clusterConfig con
 	)
 
 	nsLW := &kcache.ListWatch{
-		ListFunc: func(options kapi.ListOptions) (runtime.Object, error) {
+		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
 			return kc.Core().Namespaces().List(options)
 		},
-		WatchFunc: func(options kapi.ListOptions) (watch.Interface, error) {
+		WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
 			return kc.Core().Namespaces().Watch(options)
 		},
 	}
@@ -93,7 +92,6 @@ func NewClusterMonitor(archivistConfig config.ArchivistConfig, clusterConfig con
 		clusterCfg:    clusterConfig,
 		oc:            oc,
 		kc:            kc,
-		bc:            bc,
 		buildInformer: buildInformer,
 		rcInformer:    rcInformer,
 		nsInformer:    nsInformer,
@@ -106,12 +104,12 @@ func NewClusterMonitor(archivistConfig config.ArchivistConfig, clusterConfig con
 
 // ClusterMonitor monitors the state of the cluster and if necessary, evaluates namespace last activity to
 // determine which namespaces should be archived.
+// field of type StringSet (returned by sets.NewString) populate that in clustermonitor structor based on config.ProtectedNamespaces
 type ClusterMonitor struct {
 	cfg          config.ArchivistConfig
 	clusterCfg   config.ClusterConfig
 	oc           oclient.Interface // TODO: not used
 	kc           kclientset.Interface
-	bc           buildclient.CoreInterface
 	stopChannel  <-chan struct{}
 	buildIndexer kcache.Indexer
 	rcIndexer    kcache.Indexer
@@ -129,20 +127,46 @@ func (a *ClusterMonitor) Run(stopChan <-chan struct{}) {
 	go a.rcInformer.Run(a.stopChannel)
 	go a.nsInformer.Run(a.stopChannel)
 
-	// TODO: configurable duration
-	go wait.Until(a.checkCapacity, 5*time.Minute, a.stopChannel)
+	log.Infoln("begin waiting for informers to sync")
+	syncTimer := time.NewTimer(time.Minute * 5)
+	go func() {
+		<-syncTimer.C
+		log.Fatal("informers have not synced, timeout after 5 minutes.")
+	}()
+	for {
+		// use hassynced method to check build, rc, and ns informers status
+		if a.buildInformer.HasSynced() == true && a.rcInformer.HasSynced() == true && a.nsInformer.HasSynced() == true {
+			log.Infoln("informers synced")
+			syncTimer.Stop()
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 
-	// Rather than wait a complete interval, give the informers some time to receive lists of API objects, then
-	// do a capacity check:
-	time.Sleep(500 * time.Millisecond)
+	// Run an initial check on startup:
 	go a.checkCapacity()
 
-	log.Infoln("clustermonitor is running")
+	// ticker for MonitorCheckInterval
+	duration := a.cfg.MonitorCheckInterval
+	tickerTime := time.Duration(duration)
+	ticker := time.NewTicker(tickerTime)
+
+	go func() {
+		for t := range ticker.C {
+			log.Info("Checking capacity at: ", t)
+			go a.checkCapacity()
+		}
+	}()
+	// Will run the ClusterMonitor at a input time interval
+	// currently, each will stop after 10 minutes for testing purposes but this can be easily changed below
+	time.Sleep(time.Minute * 10)
+	ticker.Stop()
 }
 
 // checkCapacity checks the capacity by all configured metrics and determines what (if any) namespaces need to
 // be archived.
 func (a *ClusterMonitor) checkCapacity() {
+	// TODO: handle error here
 	a.getNamespacesToArchive(time.Now())
 	// TODO: trigger actual archival for each namespace here
 }
@@ -159,30 +183,26 @@ func (a LastActivitySorter) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a LastActivitySorter) Less(i, j int) bool { return a[i].Time.Before(a[j].Time) }
 
 func (a *ClusterMonitor) getNamespacesToArchive(checkTime time.Time) ([]LastActivity, error) {
-
 	capLog := log.WithFields(log.Fields{
-		"component": "capacitycheck",
+		"component": logComponent,
 	})
 	if a.clusterCfg.NamespaceCapacity.HighWatermark == 0 {
 		capLog.Warnln("no namespace capacity high watermark defined, skipping")
-		return []LastActivity{}, nil
+		return nil, nil
 	}
 	if a.clusterCfg.NamespaceCapacity.LowWatermark == 0 {
 		capLog.Warnln("no namespace capacity low watermark defined, skipping")
-		return []LastActivity{}, nil
+		return nil, nil
 	}
-	// TODO: max/min inactive must be defined? or catch in config validation
 
 	// Calculate the actual time for our activity range:
-	minInactive := checkTime.AddDate(0, 0, -a.clusterCfg.MinInactiveDays)
-	maxInactive := checkTime.AddDate(0, 0, -a.clusterCfg.MaxInactiveDays)
+	minInactive := checkTime.Add(time.Duration(-a.clusterCfg.MinInactiveDuration))
+	maxInactive := checkTime.Add(time.Duration(-a.clusterCfg.MaxInactiveDuration))
 
 	veryInactive := make([]LastActivity, 0, 20)     // will definitely be archived
 	somewhatInactive := make([]LastActivity, 0, 20) // may be archived if we need room
 
 	// Calculate last activity time for all namespaces and sort it:
-
-	//namespaceCount := len(namespaces)
 	namespaces := a.nsIndexer.List()
 	capLog.WithFields(log.Fields{
 		"checkTime":     checkTime,
@@ -192,15 +212,16 @@ func (a *ClusterMonitor) getNamespacesToArchive(checkTime time.Time) ([]LastActi
 		"lowWatermark":  a.clusterCfg.NamespaceCapacity.LowWatermark,
 	}).Infoln("calculating namespaces to be archived")
 
-	for _, pt := range namespaces {
-		namespace := pt.(*kapi.Namespace)
-		if stringInSlice(namespace.Name, a.clusterCfg.ProtectedNamespaces) {
+	for _, nsPtr := range namespaces {
+		namespace := nsPtr.(*kapi.Namespace)
+		if util.StringInSlice(namespace.Name, a.clusterCfg.ProtectedNamespaces) {
 			capLog.WithFields(log.Fields{"namespace": namespace.Name}).Debugln("skipping protected namespace")
 			continue
 		}
 		lastActivity, err := a.getLastActivity(namespace.Name)
 		if err != nil {
-			return []LastActivity{}, err
+			capLog.Errorln(err)
+			return nil, err
 		}
 		if lastActivity.IsZero() {
 			capLog.WithFields(log.Fields{"namespace": namespace.Name}).Warnln("no last activity time calculated for namespace")
@@ -231,7 +252,8 @@ func (a *ClusterMonitor) getNamespacesToArchive(checkTime time.Time) ([]LastActi
 		"somewhatInactive": len(somewhatInactive),
 	}).Infoln("last activity totals")
 
-	namespacesToArchive := make([]LastActivity, len(veryInactive), (cap(veryInactive)+1)*2)
+	namespacesToArchive := make([]LastActivity, len(veryInactive),
+		len(veryInactive)+len(somewhatInactive))
 	copy(namespacesToArchive, veryInactive)
 	newNSCount := len(namespaces) - len(namespacesToArchive)
 
@@ -250,9 +272,9 @@ func (a *ClusterMonitor) getNamespacesToArchive(checkTime time.Time) ([]LastActi
 			namespacesToArchive = append(namespacesToArchive, somewhatInactive...)
 		} else {
 			// Only now do we actually need to sort, and only the namespaces eligible for archival.
-			// Sort into ascending order, and we will use the namespaces at the start of the slice.
+			// Sort into ascending order, and we will use the namespaces at the start of the slice
 			// (i.e. those with the most recent activity get to remain, despite being within the
-			// threshold for archival)
+			// threshold for archival).
 			sort.Sort(LastActivitySorter(somewhatInactive))
 			namespacesToArchive = append(namespacesToArchive,
 				somewhatInactive[0:targetCount]...)
@@ -262,6 +284,16 @@ func (a *ClusterMonitor) getNamespacesToArchive(checkTime time.Time) ([]LastActi
 	for _, ap := range namespacesToArchive {
 		capLog.Infoln("archiving:", ap.Namespace.Name)
 	}
+
+	dryRun := a.cfg.DryRun
+	if dryRun == false {
+		// here we would set up anything else needed in order to take the project snapshot and move to S3 before moving into archival specifics?
+		capLog.Infoln("actual archiving will occur.")
+
+	} else {
+		capLog.Infoln("logging without actual archival will occur.")
+	}
+
 	newNSCount = len(namespaces) - len(namespacesToArchive)
 	if newNSCount > a.clusterCfg.NamespaceCapacity.LowWatermark {
 		capLog.WithFields(log.Fields{
@@ -271,10 +303,9 @@ func (a *ClusterMonitor) getNamespacesToArchive(checkTime time.Time) ([]LastActi
 	}
 
 	return namespacesToArchive, nil
-
 }
 
-// GetLastActivity returns the last activity time for a namespace by examining it's builds and replication controllers.
+// GetLastActivity returns the last activity time for a namespace by examining its builds and replication controllers.
 // If no builds or replication controllers are found we return nil. If the namespace does not exist, we return an error.
 func (a *ClusterMonitor) GetLastActivity(namespace string) (time.Time, error) {
 	// return an error if the namespace doesn't exist
@@ -283,31 +314,22 @@ func (a *ClusterMonitor) GetLastActivity(namespace string) (time.Time, error) {
 		return time.Time{}, err
 	}
 	if !exists {
-		return time.Time{}, errors.New(fmt.Sprintf("namespace does not exist in cache: %s", namespace))
+		return time.Time{}, fmt.Errorf("namespace does not exist in cache: %s", namespace)
 	}
 
-	tm, err := a.getLastActivity(namespace)
-	return tm, err
-}
-
-func stringInSlice(a string, list []string) bool {
-	for _, b := range list {
-		if b == a {
-			return true
-		}
-	}
-	return false
+	return a.getLastActivity(namespace)
 }
 
 func (a *ClusterMonitor) getLastActivity(namespace string) (time.Time, error) {
-
 	nsLog := log.WithFields(log.Fields{
 		"namespace": namespace,
 		"component": logComponent,
 	})
 
 	// Not necessarily a problem here, but worth warning about:
-	if stringInSlice(namespace, a.clusterCfg.ProtectedNamespaces) {
+	// set lookup using structs as a key in a map
+	// set from slice -> sets package (sets.NewString)
+	if util.StringInSlice(namespace, a.clusterCfg.ProtectedNamespaces) {
 		nsLog.Warnln("called getLastActivity for protected namespace")
 	}
 
@@ -329,9 +351,8 @@ func (a *ClusterMonitor) getLastActivity(namespace string) (time.Time, error) {
 		// Build may briefly have no start timestamp, ignore it:
 		if b.Status.StartTimestamp == nil {
 			nsLog.WithFields(log.Fields{
-				"namespace": namespace,
-				"name":      b.Name,
-				"kind":      "Build",
+				"name": b.Name,
+				"kind": "Build",
 			}).Debugln("skipping build with no start time")
 			continue
 		}
@@ -348,7 +369,7 @@ func (a *ClusterMonitor) getLastActivity(namespace string) (time.Time, error) {
 
 	for _, obj := range rcs {
 		r := obj.(*kapi.ReplicationController)
-		if r.ObjectMeta.CreationTimestamp.Time == (time.Time{}) {
+		if r.ObjectMeta.CreationTimestamp.Time.IsZero() {
 			nsLog.WithFields(log.Fields{
 				"name": r.Name,
 				"kind": "ReplicationController",
@@ -362,8 +383,21 @@ func (a *ClusterMonitor) getLastActivity(namespace string) (time.Time, error) {
 				"lastActivity": lastActivity,
 				"kind":         "ReplicationController",
 				"name":         r.Name,
-			}).Debugln("updating namespace in cache")
+			}).Debugln("updating last activity time")
 		}
+	}
+
+	if lastActivity.IsZero() {
+		currentNamespace, err := a.kc.Core().Namespaces().Get(namespace, metav1.GetOptions{})
+		if err != nil {
+			return time.Time{}, err
+		}
+		lastActivity = currentNamespace.ObjectMeta.CreationTimestamp.Time
+		nsLog.WithFields(log.Fields{
+			"lastActivity": lastActivity,
+			"kind":         "NoReplicationControllerAndBuild",
+			"namespace":    namespace,
+		}).Infoln("no builds or RCs for current Namespace, using project creation time for archival")
 	}
 
 	nsLog.WithFields(log.Fields{"lastActivity": lastActivity}).Debugln("calculated last activity")
