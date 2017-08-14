@@ -4,7 +4,6 @@
     msg: "Please specify a value for {{ item }}"
   when: item is undefined
   with_items:
-  - osoa_git_ssh_key
   - osoa_namespace_high_watermark
   - osoa_namespace_low_watermark
   - osoa_min_inactive_days
@@ -14,7 +13,6 @@
   when: osoa_uninstall | bool
 
 - debug: msg="Deploying {{ osoa_appname}} from {{ osoa_git_repo }} ref {{osoa_git_ref }}"
-- debug: var=osoa_git_ssh_key
 
 - name: copy archivist template
   copy:
@@ -42,7 +40,6 @@
       NAME: "{{ osoa_appname }}"
       GIT_REPO: "{{ osoa_git_repo }}"
       GIT_REF: "{{ osoa_git_ref }}"
-      GIT_SSH_KEY: "{{ osoa_git_ssh_key }}"
       NAMESPACE_HIGH_WATERMARK: "{{ osoa_namespace_high_watermark }}"
       NAMESPACE_LOW_WATERMARK: "{{ osoa_namespace_low_watermark }}"
       MIN_INACTIVE_DAYS: "{{ osoa_min_inactive_days }}"

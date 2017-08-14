@@ -14,9 +14,6 @@ parameters:
 - name: GIT_REF
   description: Git branch, commit, or tag to deploy.
   value: "master"
-- name: GIT_SSH_KEY
-  description: A base64 encoded GitHub deployer ssh key for the online repo.
-  required: true
 - name: LOG_LEVEL
   value: info
 - name: NAMESPACE_HIGH_WATERMARK
@@ -67,15 +64,6 @@ objects:
     name: ${NAME}
     namespace: openshift-infra
 
-- kind: Secret
-  apiVersion: v1
-  data:
-    ssh-privatekey: ${GIT_SSH_KEY}
-  kind: Secret
-  metadata:
-    name: ${NAME}-sshkey
-  type: kubernetes.io/ssh-auth
-
 - apiVersion: v1
   kind: ImageStream
   metadata:
@@ -93,8 +81,6 @@ objects:
       git:
         uri: ${GIT_REPO}
         ref: ${GIT_REF}
-      sourceSecret:
-        name: ${NAME}-sshkey
     strategy:
       dockerStrategy:
         from:

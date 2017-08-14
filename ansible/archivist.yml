@@ -3,28 +3,26 @@
   hosts: masters
   remote_user: root
   run_once: true
-  vars:
-    cli_version: "3.6"
   tasks:
-  - include_vars:
-      dir: 'vars'
+
+  - set_fact:
+      vars_dir: "./vars/"
+    when: vars_dir is not defined
+
+  - name: Check if optional vars/ dir exists
+    local_action: stat path="{{ vars_dir }}"
+    register: vars_dir_stat
+    become: no
+
+  - name: Load all variables from vars/
+    include_vars:
+      dir: "{{ vars_dir }}"
       extensions:
       - yml
-
-  - include_vars:
-      dir: "{{ secrets_dir }}"
-      extensions:
-      - yml
-
-  - name: Check for required vars
-    fail:
-      msg: "Please specify a value for {{ item }}"
-    when: item is undefined
-    with_items:
-    - cli_version
+    when: vars_dir_stat.stat.exists
 
   - include_role:
-      name: "aos_{{ cli_version }}_roles/lib_openshift"
+      name: lib_openshift
 
   - include_role:
       name: oso_archivist
@@ -32,7 +30,6 @@
       osoa_appname: "{{ online_archivist_appname }}"
       osoa_git_repo: "{{ online_archivist_git_repo }}"
       osoa_git_ref: "{{ online_archivist_git_ref }}"
-      osoa_git_ssh_key: "{{ online_archivist_deploy_key }}"
       osoa_namespace_high_watermark: "{{ online_archivist_namespace_high_watermark }}"
       osoa_namespace_low_watermark: "{{ online_archivist_namespace_low_watermark }}"
       osoa_min_inactive_days: "{{ online_archivist_min_inactive_days }}"

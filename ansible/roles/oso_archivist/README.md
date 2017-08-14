@@ -30,7 +30,6 @@ application. *NOT FOR USE IN ONGOING CONFIG MANAGEMENT LOOPS*
 * osoa_max_inactive_days - Number of days after which a project *will* be archived, regardless if we need capacity or not.
 * osoa_namespace_high_watermark - Number of namespaces/projects that will trigger archival to get to low watermark.
 * osoa_namespace_low_watermark - Number of namespaces/projects we will archive until we reach.
-* osoa_git_ssh_key - A Github "deployer" key for accessing the upstream Archivist git repo.
 
 ### Optional
 
