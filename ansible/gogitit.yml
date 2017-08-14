@@ -1,0 +1,10 @@
+---
+output_dir: ./
+repos:
+- id: openshift-ansible
+  url: https://github.com/openshift/openshift-ansible.git
+  version: openshift-ansible-3.7.0-0.125.0
+
+  copy:
+  - src: roles/lib_openshift/
+    dst: roles/lib_openshift/
