@@ -1,0 +1,16 @@
+---
+- name: "uninstall all {{ osoa_appname }} components"
+  oc_obj:
+    state: absent
+    kind: "{{ item.kind }}"
+    name: "{{ item.name }}"
+    namespace: openshift-infra
+  with_items:
+    - { kind: "deploymentconfig", name: "{{ osoa_appname }}" }
+    - { kind: "configmap", name: "{{ osoa_appname }}" }
+    - { kind: "buildconfig", name: "{{ osoa_appname }}" }
+    - { kind: "imagestream", name: "{{ osoa_appname }}" }
+    - { kind: "secret", name: "{{ osoa_appname }}-sshkey" }
+    - { kind: "clusterrolebinding", name: "{{ osoa_appname }}" }
+    - { kind: "serviceaccount", name: "{{ osoa_appname }}" }
+    - { kind: "clusterrole", name: "{{ osoa_appname }}" }
