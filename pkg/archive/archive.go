@@ -182,32 +182,33 @@ func (a *Archiver) scanProjectObjects() error {
 		a.exporter.Export(info.Object, false)
 
 		// We do not want to archive transient objects such as pods or replication controllers:
-		if info.ResourceMapping().Resource != "pods" &&
-			info.ResourceMapping().Resource != "replicationcontrollers" &&
-			info.ResourceMapping().Resource != "builds" {
+		if info.ResourceMapping().Resource == "pods" ||
+			info.ResourceMapping().Resource == "replicationcontrollers" ||
+			info.ResourceMapping().Resource == "builds" {
 
-			// Need to version the resources for export:
-			clientConfig, err := a.f.ClientConfig()
-			if err != nil {
-				return err
-			}
-			outputVersion := *clientConfig.GroupVersion
-			object, err := resource.AsVersionedObject([]*resource.Info{info}, false, outputVersion, kapi.Codecs.LegacyCodec(outputVersion))
-			if err != nil {
-				return err
-			}
-
-			if info.ResourceMapping().Resource == "services" {
-				svc := object.(*kapiv1.Service)
-				// Must strip the cluster IP from exported service.
-				svc.Spec.ClusterIP = ""
-			}
-
-			objLog.Info("exporting")
-			a.objectsToExport = append(a.objectsToExport, object)
-		} else {
 			objLog.Info("skipping")
+			return nil
 		}
+
+		// Need to version the resources for export:
+		clientConfig, err := a.f.ClientConfig()
+		if err != nil {
+			return err
+		}
+		outputVersion := *clientConfig.GroupVersion
+		object, err := resource.AsVersionedObject([]*resource.Info{info}, false, outputVersion, kapi.Codecs.LegacyCodec(outputVersion))
+		if err != nil {
+			return err
+		}
+
+		if info.ResourceMapping().Resource == "services" {
+			svc := object.(*kapiv1.Service)
+			// Must strip the cluster IP from exported service.
+			svc.Spec.ClusterIP = ""
+		}
+
+		objLog.Info("exporting")
+		a.objectsToExport = append(a.objectsToExport, object)
 		return nil
 	})
 
@@ -347,7 +348,6 @@ func SerializeObjList(list runtime.Object) (string, error) {
 // persistent volumes, archives them to long term storage and then deletes those objects from
 // the cluster.
 func (a *Archiver) Archive() (string, error) {
-
 	a.log.Info("beginning archival")
 
 	objList, err := a.Export()
@@ -390,7 +390,6 @@ func (a *Archiver) exportTemplate(obj runtime.Object) error {
 // Unarchive imports a template of the project and associated user metadata
 // String YAML input is currently being used for testing
 func (a *Archiver) Unarchive() error {
-
 	a.log.Info("beginning unarchival")
 
 	file, err := ioutil.ReadFile("user.yaml")
@@ -481,7 +480,6 @@ func (a *Archiver) Import(yamlInput string) error {
 // matches an existing Service Account, the function adds imagePullSecrets if any exist
 // pass in the current object being visited, which has already been identified as a Service Account
 func (a *Archiver) scanServiceAccountsForImport(info *resource.Info) error {
-
 	// version the incoming resource
 	clientConfig, err := a.f.ClientConfig()
 	if err != nil {

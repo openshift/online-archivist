@@ -1,6 +1,7 @@
 package clustermonitor
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -13,8 +14,6 @@ import (
 	kcache "k8s.io/client-go/tools/cache"
 	kapi "k8s.io/kubernetes/pkg/api"
 	ktestclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
-
-	"fmt"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
