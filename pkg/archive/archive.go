@@ -20,9 +20,12 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/pkg/api"
 	kapi "k8s.io/kubernetes/pkg/api"
 	kapiv1 "k8s.io/kubernetes/pkg/api/v1"
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
+	"k8s.io/kubernetes/pkg/controller/namespace/deletion"
 	"k8s.io/kubernetes/pkg/kubectl/resource"
 	"k8s.io/kubernetes/pkg/printers"
 
@@ -365,7 +368,33 @@ func (a *Archiver) Archive() (string, error) {
 	a.log.Debug(yamlStr)
 
 	// Finally delete the project's associated resources, but not the project.
-	a.pc.ProjectV1().Projects().Delete(a.namespace, &metav1.DeleteOptions{})
+	// a.pc.ProjectV1().Projects().Delete(a.namespace, &metav1.DeleteOptions{})
+
+	clientConfig, err := a.f.ClientConfig()
+	if err != nil {
+		return "", err
+	}
+
+	clientPool := dynamic.NewClientPool(clientConfig, api.Registry.RESTMapper(), dynamic.LegacyAPIPathResolverFunc)
+	a.log.Info("discovering project resources to delete")
+	discoverResourcesFn := a.kc.Discovery().ServerPreferredNamespacedResources
+
+	// namespacedResourcesDeleter is used to delete all resources in a given namespace.
+	// Client to manipulate the namespace: nsClient v1clientset.NamespaceInterface
+	// Dynamic client to list and delete all namespaced resources: clientPool dynamic.ClientPool
+	// Interface to get PodInterface: podsGetter v1clientset.PodsGetter
+	// Cache of what operations are not supported on each group version resource: opCache *operationNotSupportedCache, discoverResourcesFn func() ([]*metav1.APIResourceList, error)
+	// The finalizer token that should be removed from the namespace when all resources in that namespace have been deleted: finalizerToken v1.FinalizerName
+	// Also delete the namespace when all resources in the namespace have been deleted: deleteNamespaceWhenDone bool
+	d := deletion.NewNamespacedResourcesDeleter(a.kc.Core().Namespaces(), clientPool, a.kc.Core(), discoverResourcesFn, kapiv1.FinalizerKubernetes, false)
+
+	// deleting resources in namespace, not namespace itself
+	// if you want to delete the namespace itself as well, change the last argument in NewNamespacedResourcesDeleter to "true"
+	err = d.Delete(a.namespace)
+	if err != nil {
+		a.log.Errorf("Unexpected error when synching namespace %v", err)
+	}
+	a.log.Info("deletion of resources complete")
 
 	return yamlStr, nil
 }
