@@ -555,7 +555,6 @@ func (a *Archiver) scanServiceAccountsForImport(info *resource.Info) error {
 
 // GetImportedObjects returns a kapi List of imported objects
 func (a *Archiver) GetImportedObjects() runtime.Object {
-
 	template := &kapi.List{
 		ListMeta: metav1.ListMeta{},
 		Items:    a.objectsImported,

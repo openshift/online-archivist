@@ -18,6 +18,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
 	kcache "k8s.io/client-go/tools/cache"
 	kapi "k8s.io/kubernetes/pkg/api"
@@ -110,7 +111,6 @@ type ClusterMonitor struct {
 	clusterCfg   config.ClusterConfig
 	oc           oclient.Interface // TODO: not used
 	kc           kclientset.Interface
-	stopChannel  <-chan struct{}
 	buildIndexer kcache.Indexer
 	rcIndexer    kcache.Indexer
 	nsIndexer    kcache.Indexer
@@ -121,11 +121,10 @@ type ClusterMonitor struct {
 	nsInformer    kcache.SharedIndexInformer
 }
 
-func (a *ClusterMonitor) Run(stopChan <-chan struct{}) {
-	a.stopChannel = stopChan
-	go a.buildInformer.Run(a.stopChannel)
-	go a.rcInformer.Run(a.stopChannel)
-	go a.nsInformer.Run(a.stopChannel)
+func (a *ClusterMonitor) Run() {
+	go a.buildInformer.Run(wait.NeverStop)
+	go a.rcInformer.Run(wait.NeverStop)
+	go a.nsInformer.Run(wait.NeverStop)
 
 	log.Infoln("begin waiting for informers to sync")
 	syncTimer := time.NewTimer(time.Minute * 5)
