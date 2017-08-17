@@ -1,7 +1,6 @@
 package integration
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/openshift/online-archivist/cmd"
@@ -15,6 +14,8 @@ import (
 	imageclientset "github.com/openshift/origin/pkg/image/generated/clientset"
 	projectclientset "github.com/openshift/origin/pkg/project/generated/clientset"
 	userclientset "github.com/openshift/origin/pkg/user/generated/clientset"
+	origintestutil "github.com/openshift/origin/test/util"
+	origintestserver "github.com/openshift/origin/test/util/server"
 
 	buildapi "github.com/openshift/origin/pkg/build/apis/build"
 	buildv1 "github.com/openshift/origin/pkg/build/apis/build/v1"
@@ -24,10 +25,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	restclient "k8s.io/client-go/rest"
+	kclientcmd "k8s.io/client-go/tools/clientcmd"
 	kapiv1 "k8s.io/kubernetes/pkg/api/v1"
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
-
-	"github.com/spf13/pflag"
 )
 
 type testHarness struct {
@@ -50,24 +50,23 @@ type testHarness struct {
 
 func newTestHarness(t *testing.T) *testHarness {
 
-	// Use default config which defaults to using current kubeconfig context. For our purposes we
-	// assume you must be logged in as system:admin to a test cluster, likely minishift or oc cluster up.
-	// If not, we immediately fail the test case and tell you why. In future, it would be nice to
-	// specify how to connect to a test cluster via config or env vars.
-	//
-	// In general the tests should clean up after themselves.
-	dcc := clientcmd.DefaultClientConfig(pflag.NewFlagSet("empty", pflag.ContinueOnError))
-	rawc, err := dcc.RawConfig()
+	// Spin up a temporary OpenShift test master:
+	origintestutil.RequireEtcd(t)
+	masterConfig, kubeConfig, err := origintestserver.StartTestMaster()
 	if err != nil {
-		t.Errorf("unable to parse kubeconfig")
-		t.FailNow()
+		t.Fatal(err)
 	}
-	if !strings.Contains(rawc.CurrentContext, "system:admin") {
-		t.Errorf("must oc login to a test cluster as 'system:admin', current context was: %s",
-			rawc.CurrentContext)
-		t.FailNow()
+
+	kubeConfigFile := masterConfig.MasterClients.OpenShiftLoopbackKubeConfig
+	loader := kclientcmd.NewNonInteractiveDeferredLoadingClientConfig(&kclientcmd.ClientConfigLoadingRules{ExplicitPath: kubeConfigFile}, &kclientcmd.ConfigOverrides{})
+	f := clientcmd.NewFactory(loader)
+
+	restConfig, err := origintestutil.GetClusterAdminClientConfig(kubeConfig)
+	if err != nil {
+		t.Fatal(err)
 	}
-	restConfig, f, oc, _, err := cmd.CreateClientsForConfig(dcc)
+
+	oc, err := osclient.New(restConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
