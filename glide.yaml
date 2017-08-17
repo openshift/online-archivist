@@ -1,4 +1,4 @@
-package: github.com/openshift/online/archivist
+package: github.com/openshift/online-archivist
 
 import:
 # This is the core Origin dependency.
@@ -11,3 +11,4 @@ import:
   version: v0.11.5
   repo:    https://github.com/Sirupsen/logrus.git
   vcs:     git
+

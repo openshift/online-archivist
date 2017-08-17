@@ -1,0 +1,13 @@
+{
+	"source": {
+		"cluster": {
+			"namespace": "project1"
+		}
+	},
+	"dest": {
+		"cluster": {
+			"namespace": "project2"
+		}
+	}
+
+}
