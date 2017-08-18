@@ -23,6 +23,10 @@ import (
 	"k8s.io/kubernetes/pkg/printers"
 )
 
+const (
+	localImageStreamName = "localimg"
+)
+
 func getTestProjectName(prefix string) string {
 	rand.Seed(time.Now().Unix())
 	i := rand.Intn(10000)
@@ -67,7 +71,6 @@ func testExport(t *testing.T, h *testHarness) {
 	createTestProject(t, h, tlog, pn)
 	defer h.pc.ProjectV1().Projects().Delete(pn, &metav1.DeleteOptions{})
 
-	h.createDeploymentConfig(t, pn, "testdc")
 	h.createSecret(t, pn, "testsecret")
 
 	buildSecret := h.createBuildSecret(t, pn, "dockerbuildsecret")
@@ -94,8 +97,9 @@ func testExport(t *testing.T, h *testHarness) {
 	// We do not expect to see this in the results:
 	h.createBuild(t, pn)
 	h.createSvcAccount(t, pn, "testserviceaccount")
-	h.createRegistryImageStream(t, pn, "localimg")
+	h.createRegistryImageStream(t, pn, localImageStreamName)
 	h.createExternalImageStream(t, pn, "postgresql")
+	h.createDeploymentConfig(t, pn, "testdc", localImageStreamName)
 	h.createService(t, pn, "testservice")
 
 	expected := []string{

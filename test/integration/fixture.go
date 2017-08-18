@@ -20,6 +20,7 @@ import (
 	buildapi "github.com/openshift/origin/pkg/build/apis/build"
 	buildv1 "github.com/openshift/origin/pkg/build/apis/build/v1"
 	deployv1 "github.com/openshift/origin/pkg/deploy/apis/apps/v1"
+	imageapi "github.com/openshift/origin/pkg/image/apis/image"
 	imagev1 "github.com/openshift/origin/pkg/image/apis/image/v1"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -188,7 +189,8 @@ func (h *testHarness) createBuildConfig(t *testing.T, projectName string, name s
 	return buildConfig
 }
 
-func (h *testHarness) createDeploymentConfig(t *testing.T, projectName string, name string) *deployv1.DeploymentConfig {
+func (h *testHarness) createDeploymentConfig(t *testing.T, projectName string,
+	name string, imgStreamName string) *deployv1.DeploymentConfig {
 	dc := &deployv1.DeploymentConfig{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
@@ -196,6 +198,7 @@ func (h *testHarness) createDeploymentConfig(t *testing.T, projectName string, n
 		Spec:   dcSpec(),
 		Status: dcStatus(1),
 	}
+	dc.Spec.Triggers = []deployv1.DeploymentTriggerPolicy{dcImageChangeTrigger(imgStreamName)}
 	var err error
 	dc, err = h.deployClient.AppsV1().DeploymentConfigs(projectName).Create(dc)
 	if err != nil {
@@ -309,6 +312,21 @@ func dcSpec() deployv1.DeploymentConfigSpec {
 	}
 }
 
+func dcImageChangeTrigger(imgStreamName string) deployv1.DeploymentTriggerPolicy {
+	return deployv1.DeploymentTriggerPolicy{
+		Type: deployv1.DeploymentTriggerOnImageChange,
+		ImageChangeParams: &deployv1.DeploymentTriggerImageChangeParams{
+			Automatic: true,
+			ContainerNames: []string{
+				"container1",
+			},
+			From: kapiv1.ObjectReference{
+				Kind: "ImageStreamTag",
+				Name: imageapi.JoinImageStreamTag(imgStreamName, imageapi.DefaultImageTag),
+			},
+		},
+	}
+}
 func dcStatus(version int64) deployv1.DeploymentConfigStatus {
 	return deployv1.DeploymentConfigStatus{
 		LatestVersion: version,
