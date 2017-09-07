@@ -265,14 +265,14 @@ func (h *testHarness) createExternalImageStream(t *testing.T, projectName string
 	return is
 }
 
-func (h *testHarness) createBuild(t *testing.T, projectName string) *buildv1.Build {
+func (h *testHarness) createBuild(t *testing.T, projectName string, buildName string) *buildv1.Build {
 	build := &buildv1.Build{ObjectMeta: metav1.ObjectMeta{
 		Labels: map[string]string{
 			buildapi.BuildConfigLabel:    "mock-build-config",
 			buildapi.BuildRunPolicyLabel: string(buildapi.BuildRunPolicyParallel),
 		},
 	}}
-	build.Name = "test-build"
+	build.Name = buildName
 	build.Spec.Source.Git = &buildv1.GitBuildSource{URI: "http://build.uri/build"}
 	build.Spec.Strategy.DockerStrategy = &buildv1.DockerBuildStrategy{}
 	build.Spec.Output.To = &kapiv1.ObjectReference{

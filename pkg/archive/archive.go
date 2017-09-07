@@ -31,6 +31,9 @@ import (
 
 // Archiver allows for a variety of export, import, archive and unarchive operations. One archiver
 // should be created per operation as they are bound to a particular namespace and carry state.
+// The Archiver attempts to export as much information as possible, and filter down on import. This
+// is a safer approach in the event something goes wrong, and we need to fix a bug to get a project
+// to successfully import and come back to life.
 type Archiver struct {
 	pc projectclientset.Interface
 	ac authclientset.Interface
@@ -40,10 +43,11 @@ type Archiver struct {
 	uidmc osclient.UserIdentityMappingInterface
 	idc   osclient.IdentityInterface
 
-	oc              osclient.Interface
-	kc              kclientset.Interface
-	exporter        cmd.Exporter
-	f               *clientcmd.Factory
+	f        *clientcmd.Factory
+	oc       osclient.Interface
+	kc       kclientset.Interface
+	exporter cmd.Exporter
+	*clientcmd.Factory
 	mapper          meta.RESTMapper
 	typer           runtime.ObjectTyper
 	objectsToExport []runtime.Object
@@ -101,6 +105,7 @@ func NewArchiver(
 }
 
 // Export generates and returns a kapi.List containing all exported objects from the project.
+// Should contain as much data from the project as possible, we filter on import instead.
 func (a *Archiver) Export() (runtime.Object, error) {
 	a.log.Info("beginning export")
 
@@ -110,7 +115,7 @@ func (a *Archiver) Export() (runtime.Object, error) {
 		return nil, err
 	}
 
-	// Get all resources for this project and archive them, but keep the project. Using this kubectl resource infra
+	// Get all resources for this project and archive them. Using this kubectl resource infra
 	// allows us to list all objects generically, instead of hard coding a lookup for each API type
 	// and then having to constantly keep that up to date as more types are added.
 	a.log.Debugln("scanning objects in project")
@@ -164,13 +169,9 @@ func (a *Archiver) Export() (runtime.Object, error) {
 // Some types are not included in this however and must be dealt with separately. (i.e. Secrets, Service Accounts)
 func (a *Archiver) scanProjectObjects() error {
 
-	// TODO: ExportParam is not actually hooked up server side for list operations yet but to:
-	// https://github.com/kubernetes/kubernetes/issues/49497
-	// Because of this we hack around the problem for now, see below.
 	r := resource.NewBuilder(a.mapper, a.typer, resource.ClientMapperFunc(a.f.ClientForMapping),
 		kapi.Codecs.UniversalDecoder()).
 		NamespaceParam(a.namespace).DefaultNamespace().AllNamespaces(false).
-		ExportParam(true).
 		ResourceTypeOrNameArgs(true, "all").
 		Flatten()
 
@@ -178,17 +179,6 @@ func (a *Archiver) scanProjectObjects() error {
 		objLog := a.log.WithFields(log.Fields{
 			"object": fmt.Sprintf("%s/%s", a.ObjKind(info.Object), info.Name),
 		})
-
-		a.exporter.Export(info.Object, false)
-
-		// We do not want to archive transient objects such as pods or replication controllers:
-		if info.ResourceMapping().Resource == "pods" ||
-			info.ResourceMapping().Resource == "replicationcontrollers" ||
-			info.ResourceMapping().Resource == "builds" {
-
-			objLog.Info("skipping")
-			return nil
-		}
 
 		// Need to version the resources for export:
 		clientConfig, err := a.f.ClientConfig()
@@ -199,12 +189,6 @@ func (a *Archiver) scanProjectObjects() error {
 		object, err := resource.AsVersionedObject([]*resource.Info{info}, false, outputVersion, kapi.Codecs.LegacyCodec(outputVersion))
 		if err != nil {
 			return err
-		}
-
-		if info.ResourceMapping().Resource == "services" {
-			svc := object.(*kapiv1.Service)
-			// Must strip the cluster IP from exported service.
-			svc.Spec.ClusterIP = ""
 		}
 
 		objLog.Info("exporting")
@@ -238,22 +222,7 @@ func (a *Archiver) scanProjectSecrets() ([]string, error) {
 		objLog := a.log.WithFields(log.Fields{
 			"object": fmt.Sprintf("%s/%s", a.ObjKind(&s), s.Name),
 		})
-		// Skip certain secret types, we'll let service accounts and such be recreated on the import:
-		if s.Type == kapiv1.SecretTypeServiceAccountToken {
-			objLog.Debugln("skipping service account token secret")
-			filteredSecrets = append(filteredSecrets, s.Name)
-			continue
-		}
-		// Skip dockercfg secrets if they're linked explicitly to a service account. These will be
-		// recreated in the destination project for us.
-		if s.Type == kapiv1.SecretTypeDockercfg {
-			_, ok := s.GetAnnotations()[kapiv1.ServiceAccountUIDKey]
-			if ok {
-				objLog.Debugln("skipping dockercfg secret linked to service account")
-				filteredSecrets = append(filteredSecrets, s.Name)
-				continue
-			}
-		}
+
 		objLog.Info("exporting")
 
 		err := a.versionAndAppendObject(&s)
@@ -308,10 +277,6 @@ func (a *Archiver) scanProjectServiceAccounts(filteredSecretNames []string) erro
 // exported to the template missing a kind and version.
 func (a *Archiver) versionAndAppendObject(obj runtime.Object) error {
 	clientConfig, err := a.f.ClientConfig()
-	if err != nil {
-		return err
-	}
-	err = a.exporter.Export(obj, false)
 	if err != nil {
 		return err
 	}
@@ -421,20 +386,15 @@ func (a *Archiver) Import(yamlInput string) error {
 
 	reader := strings.NewReader(yamlInput)
 
-	// create the build
-	build := resource.NewBuilder(a.mapper, a.typer, resource.ClientMapperFunc(a.f.ClientForMapping),
+	builder := resource.NewBuilder(a.mapper, a.typer, resource.ClientMapperFunc(a.f.ClientForMapping),
 		kapi.Codecs.UniversalDecoder()).
 		ContinueOnError().
 		NamespaceParam(a.namespace).DefaultNamespace().AllNamespaces(false).
 		Flatten()
-	a.log.Info("build created")
+	builder = builder.Stream(reader, "error building from YAML")
 
-	// complete the build with the YAML string
-	completeBuild := build.Stream(reader, "error building from YAML")
-	a.log.Info("build completed from YAML")
-
-	// create visitors for each resource
-	err := completeBuild.Do().Visit(func(info *resource.Info, err error) error {
+	// Create visitors for each resource:
+	err := builder.Do().Visit(func(info *resource.Info, err error) error {
 		if err != nil {
 			return err
 		}
@@ -442,30 +402,60 @@ func (a *Archiver) Import(yamlInput string) error {
 			"object": fmt.Sprintf("%s/%s", a.ObjKind(info.Object), info.Name),
 		})
 
-		// check for transient objects on import as a secondary check
-		if info.ResourceMapping().Resource != "pods" && info.ResourceMapping().Resource != "replicationcontrollers" {
-			if info.ResourceMapping().Resource == "serviceaccounts" {
+		// Use the "exporter" to strip fields we should not be setting. This is done (weirdly)
+		// during import so we can take the approach of exporting as much as possible, and then
+		// sorting it out on import.
+		a.exporter.Export(info.Object, false)
 
-				a.log.Info("service account detected: ", info.Name)
-				// pass in the current object being visited into scanServiceAccountsForImport
-				err = a.scanServiceAccountsForImport(info)
-				if err != nil {
-					objLog.Info("error when scanning for service account")
-					return err
-				}
-			} else { // NOT a Service Account
+		switch r := info.ResourceMapping().Resource; r {
 
-				err = createAndRefresh(info)
-				if err != nil {
-					objLog.Info("error creating object")
-					return err
-				}
-				a.objectsImported = append(a.objectsImported, info.Object)
-				objLog.Info("importing")
+		case "pods", "replicationcontrollers", "builds":
+			objLog.Info("skipping transient object")
+			return nil
+
+		case "serviceaccounts":
+			// pass in the current object being visited into scanServiceAccountsForImport
+			err = a.scanServiceAccountsForImport(info)
+			if err != nil {
+				objLog.Info("error when scanning for service account")
+				return err
 			}
-		} else { // a pod or replicationcontroller
-			objLog.Info("skipping")
+			return nil
+
+		case "services":
+			svc := info.Object.(*kapi.Service)
+			// Must strip the cluster IP from exported service.
+			// TODO: This should probably be done in the export logic for services
+			svc.Spec.ClusterIP = ""
+
+		case "secrets":
+			s := info.Object.(*kapi.Secret)
+			// We don't want to import service account token secrets, these are recreated when the
+			// service account is created.
+			if s.Type == kapi.SecretTypeServiceAccountToken {
+				objLog.Debugln("skipping service account token secret")
+				return nil
+			}
+			// Skip dockercfg secrets if they're linked explicitly to a service account. These will be
+			// recreated in the destination project for us.
+			if s.Type == kapi.SecretTypeDockercfg {
+				_, ok := s.GetAnnotations()[kapi.ServiceAccountUIDKey]
+				if ok {
+					objLog.Debugln("skipping dockercfg secret linked to service account")
+					return nil
+				}
+			}
 		}
+
+		// All other resource types:
+		err = createAndRefresh(info)
+		if err != nil {
+			objLog.Info("error creating object")
+			return err
+		}
+		a.objectsImported = append(a.objectsImported, info.Object)
+		objLog.Info("importing")
+
 		return nil
 	})
 

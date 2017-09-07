@@ -14,7 +14,6 @@ import (
 	"github.com/openshift/online-archivist/pkg/archive"
 	"github.com/openshift/online-archivist/pkg/util"
 
-	imagev1 "github.com/openshift/origin/pkg/image/apis/image/v1"
 	projectv1 "github.com/openshift/origin/pkg/project/apis/project/v1"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -60,7 +59,6 @@ func createTestProject(t *testing.T, h *testHarness, tlog *log.Entry, pn string)
 
 func testExport(t *testing.T, h *testHarness) {
 	pn := getTestProjectName("exporttest")
-	log.SetLevel(log.DebugLevel)
 	tlog := log.WithFields(log.Fields{
 		"namespace": pn,
 		"test":      "exporttest",
@@ -92,15 +90,17 @@ func testExport(t *testing.T, h *testHarness) {
 	}
 
 	h.createBuildConfig(t, pn, "testbc")
-	// We do not expect to see this in the results:
-	h.createBuild(t, pn)
+	// This should appear in the exported template, but not be imported:
+	h.createBuild(t, pn, "testbuild")
 	h.createSvcAccount(t, pn, "testserviceaccount")
 	h.createRegistryImageStream(t, pn, localImageStreamName)
 	h.createExternalImageStream(t, pn, "postgresql")
 	h.createDeploymentConfig(t, pn, "testdc", localImageStreamName)
 	h.createService(t, pn, "testservice")
 
+	// Objects we expect to be exported, not all of these will be imported:
 	expected := []string{
+		"Build/testbuild",
 		"BuildConfig/testbc",
 		"DeploymentConfig/testdc",
 		"Secret/testsecret",
@@ -122,7 +122,6 @@ func testExport(t *testing.T, h *testHarness) {
 	logAll(tlog, a, objList)
 
 	t.Run("ExpectedObjectsFound", func(t *testing.T) {
-		assert.Len(t, objList.Items, len(expected), "expected object count mismatch")
 		for _, s := range expected {
 			tokens := strings.Split(s, "/")
 			kind, name := tokens[0], tokens[1]
@@ -146,16 +145,18 @@ func testExport(t *testing.T, h *testHarness) {
 		}
 	})
 
-	t.Run("ExportedObjectsHaveClusterMetadataStripped", func(t *testing.T) {
+	// Previously we planned to strip this and use export functionality to do so, however now we aim
+	// to export as much info as possible and sort it out on import instead.
+	t.Run("ExportedObjectsIncludeClusterMetadata", func(t *testing.T) {
 		for _, obj := range objList.Items {
 			accessor, err := meta.Accessor(obj.Object)
+			t.Logf("checking data is exported on %s", accessor.GetName())
 			assert.NoError(t, err)
-			assert.Zero(t, accessor.GetUID())
-			assert.Zero(t, accessor.GetNamespace())
-			assert.Zero(t, accessor.GetCreationTimestamp())
-			assert.Zero(t, accessor.GetDeletionTimestamp())
-			assert.Zero(t, accessor.GetResourceVersion())
-			assert.Zero(t, accessor.GetSelfLink())
+			assert.NotZero(t, accessor.GetUID(), "UID")
+			assert.NotZero(t, accessor.GetNamespace(), "Namespace")
+			assert.NotZero(t, accessor.GetCreationTimestamp(), "CreationTimestamp")
+			assert.NotZero(t, accessor.GetResourceVersion(), "ResourceVersion")
+			assert.NotZero(t, accessor.GetSelfLink(), "SelfLink")
 		}
 	})
 
@@ -166,28 +167,10 @@ func testExport(t *testing.T, h *testHarness) {
 		assert.Equal(t, "dockerbuildsecret", ebsa.ImagePullSecrets[0].Name)
 	})
 
-	t.Run("ExportedClusterIpIsCleared", func(t *testing.T) {
-		so := findObj(t, a, objList, "Service", "testservice")
-		eso := so.(*kapiv1.Service)
-		assert.Zero(t, eso.Spec.ClusterIP, "cluster IP is not empty")
-	})
-
-	t.Run("ExportedImageStreamsHaveNoStatus", func(t *testing.T) {
-		imgStreamObj := findObj(t, a, objList, "ImageStream", "localimg")
-		is := imgStreamObj.(*imagev1.ImageStream)
-		assert.Zero(t, is.Status.DockerImageRepository)
-		assert.Len(t, is.Status.Tags, 0)
-
-		imgStreamObj = findObj(t, a, objList, "ImageStream", "postgresql")
-		is = imgStreamObj.(*imagev1.ImageStream)
-		assert.Zero(t, is.Status.DockerImageRepository)
-		assert.Len(t, is.Status.Tags, 0)
-	})
-
-	// At this point we want to proceed to import testing. Per our current target of
-	// first being able to import back into the same project name and cluster (leaving
-	// an empty project around after archival), we need to clean out the project.
-	// TODO: hookup project cleanup here, for now we'll just delete it entirely and recreate:
+	// We're now ready to proceed to testing import. We currently plan to initially just support
+	// importing back into the same cluster and namespace, which will be reserved. As such here we
+	// can delete the old project, wait for it to be terminated, and then proceed to recreate
+	// it and import.
 	h.pc.ProjectV1().Projects().Delete(pn, &metav1.DeleteOptions{})
 
 	// Wait for project deletion to complete, can rountinely take >20s.
@@ -217,17 +200,67 @@ func testExport(t *testing.T, h *testHarness) {
 		assert.NoError(t, err)
 		err = a.Import(yamlStr)
 		assert.NoError(t, err)
+
+		t.Run("BuildConfigImported", func(t *testing.T) {
+			b, err := h.bc.BuildV1().BuildConfigs(pn).Get("testbc", metav1.GetOptions{})
+			assert.NoError(t, err)
+			assert.Equal(t, "testbc", b.Name)
+		})
+
+		t.Run("BuildNotImported", func(t *testing.T) {
+			_, err := h.bc.BuildV1().Builds(pn).Get("testbuild", metav1.GetOptions{})
+			assert.Error(t, err)
+		})
+
+		t.Run("DeploymentConfigImported", func(t *testing.T) {
+			d, err := h.deployClient.AppsV1().DeploymentConfigs(pn).Get("testdc", metav1.GetOptions{})
+			assert.NoError(t, err)
+			assert.Equal(t, "testdc", d.Name)
+		})
+
+		t.Run("SecretsImported", func(t *testing.T) {
+			s, err := h.kc.CoreV1().Secrets(pn).Get("testsecret", metav1.GetOptions{})
+			assert.NoError(t, err)
+			assert.Equal(t, "testsecret", s.Name)
+
+			s, err = h.kc.CoreV1().Secrets(pn).Get("dockerbuildsecret", metav1.GetOptions{})
+			assert.NoError(t, err)
+			assert.Equal(t, "dockerbuildsecret", s.Name)
+		})
+
+		t.Run("ServiceAccountsImported", func(t *testing.T) {
+			sa, err := h.kc.CoreV1().ServiceAccounts(pn).Get("testserviceaccount", metav1.GetOptions{})
+			assert.NoError(t, err)
+			assert.Equal(t, "testserviceaccount", sa.Name)
+		})
+
+		t.Run("ImageStreamsImported", func(t *testing.T) {
+			is, err := h.imageClient.ImageV1().ImageStreams(pn).Get("localimg", metav1.GetOptions{})
+			assert.NoError(t, err)
+			assert.Equal(t, "localimg", is.Name)
+
+			is, err = h.imageClient.ImageV1().ImageStreams(pn).Get("postgresql", metav1.GetOptions{})
+			assert.NoError(t, err)
+			assert.Equal(t, "postgresql", is.Name)
+		})
+
+		t.Run("ServiceImported", func(t *testing.T) {
+			s, err := h.kc.CoreV1().Services(pn).Get("testservice", metav1.GetOptions{})
+			assert.NoError(t, err)
+			assert.Equal(t, "testservice", s.Name)
+		})
+
+		t.Run("ImagePullSecretsMergedOntoDefaultServiceAccount", func(t *testing.T) {
+			// look up build runtime.Object from the server here
+			// bsao := findObj(t, a, objList, "ServiceAccount", "builder")
+			bsa, err := h.kc.CoreV1().ServiceAccounts(pn).Get("builder", metav1.GetOptions{})
+			if err != nil {
+				assert.Len(t, bsa.ImagePullSecrets, 1)
+				assert.Equal(t, "dockerbuildsecret", bsa.ImagePullSecrets[0].Name)
+			}
+		})
 	})
 
-	t.Run("ImportedBuilderSAHasCustomDockercfgSecret", func(t *testing.T) {
-		// look up build runtime.Object from the server here
-		// bsao := findObj(t, a, objList, "ServiceAccount", "builder")
-		bsa, err := h.kc.CoreV1().ServiceAccounts(pn).Get("builder", metav1.GetOptions{})
-		if err != nil {
-			assert.Len(t, bsa.ImagePullSecrets, 1)
-			assert.Equal(t, "dockerbuildsecret", bsa.ImagePullSecrets[0].Name)
-		}
-	})
 }
 
 func logAll(tlog *log.Entry, a *archive.Archiver, list *kapiv1.List) {
