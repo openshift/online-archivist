@@ -23,6 +23,7 @@ import (
 	imageapi "github.com/openshift/origin/pkg/image/apis/image"
 	imagev1 "github.com/openshift/origin/pkg/image/apis/image/v1"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	restclient "k8s.io/client-go/rest"
@@ -36,6 +37,8 @@ type testHarness struct {
 	kc            kclientset.Interface
 	restConfig    *restclient.Config
 	clientFactory *clientcmd.Factory
+	mapper        meta.RESTMapper
+	typer         runtime.ObjectTyper
 
 	pc           projectclientset.Interface
 	ac           authclientset.Interface
@@ -61,6 +64,7 @@ func newTestHarness(t *testing.T) *testHarness {
 	kubeConfigFile := masterConfig.MasterClients.OpenShiftLoopbackKubeConfig
 	loader := kclientcmd.NewNonInteractiveDeferredLoadingClientConfig(&kclientcmd.ClientConfigLoadingRules{ExplicitPath: kubeConfigFile}, &kclientcmd.ConfigOverrides{})
 	f := clientcmd.NewFactory(loader)
+	mapper, typer := f.Object()
 
 	restConfig, err := origintestutil.GetClusterAdminClientConfig(kubeConfig)
 	if err != nil {
@@ -92,6 +96,8 @@ func newTestHarness(t *testing.T) *testHarness {
 		kc:            kc,
 		restConfig:    restConfig,
 		clientFactory: f,
+		mapper:        mapper,
+		typer:         typer,
 
 		pc:    pc,
 		ac:    ac,
@@ -367,11 +373,11 @@ func podTemplateSpec() *kapiv1.PodTemplateSpec {
 }
 
 // FindObj finds an object of the given kind and name. If not found it will return nil.
-func findObj(t *testing.T, a *archive.Archiver, list *kapiv1.List, kind string, name string) runtime.Object {
+func findObj(t *testing.T, typer runtime.ObjectTyper, a *archive.Archiver, list *kapiv1.List, kind string, name string) runtime.Object {
 	for _, ro := range list.Items {
 		o := ro.Object
 		if md, err := metav1.ObjectMetaFor(o); err == nil {
-			if a.ObjKind(o) == kind && md.Name == name {
+			if archive.ObjKind(typer, o) == kind && md.Name == name {
 				return o
 			}
 		} else {

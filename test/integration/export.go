@@ -18,6 +18,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	kapiv1 "k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/printers"
 )
@@ -35,7 +36,7 @@ func getTestProjectName(prefix string) string {
 func testExportProjectDoesNotExist(t *testing.T, h *testHarness) {
 	a := archive.NewArchiver(h.pc, h.ac, h.uc, h.uidmc, h.idc,
 		h.clientFactory, h.oc, h.kc, "nosuchproject", "user")
-	_, err := a.Export()
+	_, err := a.Exporter.Export()
 	assert.NotNil(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
@@ -116,16 +117,16 @@ func testExport(t *testing.T, h *testHarness) {
 
 	a := archive.NewArchiver(h.pc, h.ac, h.uc, h.uidmc, h.idc,
 		h.clientFactory, h.oc, h.kc, pn, "user")
-	list, err := a.Export()
+	list, err := a.Exporter.Export()
 	assert.Nil(t, err)
 	objList := list.(*kapiv1.List)
-	logAll(tlog, a, objList)
+	logAll(tlog, h.typer, a, objList)
 
 	t.Run("ExpectedObjectsFound", func(t *testing.T) {
 		for _, s := range expected {
 			tokens := strings.Split(s, "/")
 			kind, name := tokens[0], tokens[1]
-			o := findObj(t, a, objList, kind, name)
+			o := findObj(t, h.typer, a, objList, kind, name)
 			assert.NotNil(t, o, "object was not exported: %s", s)
 		}
 	})
@@ -161,7 +162,7 @@ func testExport(t *testing.T, h *testHarness) {
 	})
 
 	t.Run("ExportedBuilderSAHasCustomDockercfgSecret", func(t *testing.T) {
-		bsao := findObj(t, a, objList, "ServiceAccount", "builder")
+		bsao := findObj(t, h.typer, a, objList, "ServiceAccount", "builder")
 		ebsa := bsao.(*kapiv1.ServiceAccount)
 		assert.Len(t, ebsa.ImagePullSecrets, 1)
 		assert.Equal(t, "dockerbuildsecret", ebsa.ImagePullSecrets[0].Name)
@@ -198,7 +199,7 @@ func testExport(t *testing.T, h *testHarness) {
 
 		yamlStr, err := archive.SerializeObjList(objList)
 		assert.NoError(t, err)
-		err = a.Import(yamlStr)
+		err = a.Importer.Import(yamlStr)
 		assert.NoError(t, err)
 
 		t.Run("BuildConfigImported", func(t *testing.T) {
@@ -263,11 +264,11 @@ func testExport(t *testing.T, h *testHarness) {
 
 }
 
-func logAll(tlog *log.Entry, a *archive.Archiver, list *kapiv1.List) {
+func logAll(tlog *log.Entry, typer runtime.ObjectTyper, a *archive.Archiver, list *kapiv1.List) {
 	tlog.Infoln("object list:")
 	for _, o := range list.Items {
 		if md, err := metav1.ObjectMetaFor(o.Object); err == nil {
-			tlog.Infof("   %s/%s", a.ObjKind(o.Object), md.Name)
+			tlog.Infof("   %s/%s", archive.ObjKind(typer, o.Object), md.Name)
 		} else {
 			tlog.Errorf("error loading ObjectMeta for: %s", o)
 		}
