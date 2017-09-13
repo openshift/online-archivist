@@ -3,12 +3,7 @@
 .DEFAULT_GOAL := help
 
 TAG ?= openshift/archivist
-TARGET ?= prod
-
 DOCKERFILE := Dockerfile
-ifeq ($(TARGET),dev)
-DOCKERFILE := Dockerfile.local
-endif
 
 # Builds and installs the archivist binary.
 build: check-gopath

@@ -1,7 +1,0 @@
-FROM golang:1.7
-
-ADD . /go/src/github.com/openshift/online-archivist
-
-WORKDIR /go/src/github.com/openshift/online-archivist
-RUN make build TARGET=dev
-ENTRYPOINT ["archivist"]
