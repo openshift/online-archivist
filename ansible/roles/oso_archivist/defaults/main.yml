@@ -1,0 +1,16 @@
+# Configure the application name used in the various OpenShift objects created for it.
+# Setting this allows for multiple instances of the archivist to exist in just one
+# namespace. (invoke this role with different osoa_appname settings.
+osoa_appname: "archivist"
+
+# WARNING: Keep these in sync with the defaults in the templates. We want the
+# template to be independently usable so default must be defined in both.
+osoa_git_repo: "https://github.com/dgoodwin/online-archivist.git"
+osoa_git_ref: "master"
+
+# Location on master where we store the OpenShift app template:
+osoa_template_path: "/etc/openshift-online/templates/archivist-template.yaml"
+osoa_namespace: "openshift-infra"
+
+# If true, will completely uninstall app before running rest of role:
+osoa_uninstall: false

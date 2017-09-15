@@ -1,0 +1,46 @@
+---
+- name: Check for required vars
+  fail:
+    msg: "Please specify a value for {{ item }}"
+  when: item is undefined
+  with_items:
+  - osoa_namespace_high_watermark
+  - osoa_namespace_low_watermark
+  - osoa_min_inactive_days
+  - osoa_max_inactive_days
+
+- include: uninstall.yml
+  when: osoa_uninstall | bool
+
+- debug: msg="Deploying {{ osoa_appname}} from {{ osoa_git_repo }} ref {{osoa_git_ref }}"
+
+- name: copy archivist template
+  copy:
+    src: archivist-template.yaml
+    dest: "{{ osoa_template_path }}"
+    #  register: copy_template_out
+
+# This task should correctly only indicate a change if the underlying template changed.
+- name: create template
+  oc_obj:
+    state: present
+    namespace: "{{ osoa_namespace }}"
+    name: archivist
+    kind: template
+    files:
+    - "{{ osoa_template_path }}"
+
+- name: oc process template
+  oc_process:
+    namespace: "{{ osoa_namespace }}"
+    template_name: archivist
+    reconcile: True
+    create: True
+    params:
+      NAME: "{{ osoa_appname }}"
+      GIT_REPO: "{{ osoa_git_repo }}"
+      GIT_REF: "{{ osoa_git_ref }}"
+      NAMESPACE_HIGH_WATERMARK: "{{ osoa_namespace_high_watermark }}"
+      NAMESPACE_LOW_WATERMARK: "{{ osoa_namespace_low_watermark }}"
+      MIN_INACTIVE_DAYS: "{{ osoa_min_inactive_days }}"
+      MAX_INACTIVE_DAYS: "{{ osoa_max_inactive_days }}"

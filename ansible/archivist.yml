@@ -1,0 +1,36 @@
+---
+- name: Deploy OpenShift Online Archivist
+  hosts: masters
+  remote_user: root
+  run_once: true
+  tasks:
+
+  - set_fact:
+      vars_dir: "./vars/"
+    when: vars_dir is not defined
+
+  - name: Check if optional vars/ dir exists
+    local_action: stat path="{{ vars_dir }}"
+    register: vars_dir_stat
+    become: no
+
+  - name: Load all variables from vars/
+    include_vars:
+      dir: "{{ vars_dir }}"
+      extensions:
+      - yml
+    when: vars_dir_stat.stat.exists
+
+  - include_role:
+      name: lib_openshift
+
+  - include_role:
+      name: oso_archivist
+    vars:
+      osoa_appname: "{{ online_archivist_appname }}"
+      osoa_git_repo: "{{ online_archivist_git_repo }}"
+      osoa_git_ref: "{{ online_archivist_git_ref }}"
+      osoa_namespace_high_watermark: "{{ online_archivist_namespace_high_watermark }}"
+      osoa_namespace_low_watermark: "{{ online_archivist_namespace_low_watermark }}"
+      osoa_min_inactive_days: "{{ online_archivist_min_inactive_days }}"
+      osoa_max_inactive_days: "{{ online_archivist_max_inactive_days }}"
