@@ -121,7 +121,7 @@ func (th TransferHandler) initiateTransfer(r *http.Request) (httpStatus int, err
 			th.kc,
 			t.Dest.Cluster.Namespace,
 			"admin")
-		err := archiver.Import(yamlStr)
+		err := archiver.Importer.Import(yamlStr)
 		if err != nil {
 			reqLog.Errorln(err)
 			return http.StatusInternalServerError, err

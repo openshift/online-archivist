@@ -3,12 +3,7 @@
 .DEFAULT_GOAL := help
 
 TAG ?= openshift/archivist
-TARGET ?= prod
-
 DOCKERFILE := Dockerfile
-ifeq ($(TARGET),dev)
-DOCKERFILE := Dockerfile.local
-endif
 
 # Builds and installs the archivist binary.
 build: check-gopath
@@ -30,7 +25,7 @@ test: build
 
 # Precompile everything required for development/test.
 test-prepare: build
-	go test -i github.com/openshift/online-archivist/test/...
+	go build -i github.com/openshift/online-archivist/test/...
 .PHONY: test-prepare
 
 # Runs the integration tests.
@@ -43,8 +38,9 @@ test-prepare: build
 #   make test-integration
 #   make test-integration TESTFLAGS="-run TestIntegration/SubscriptionUpgrade"
 test-integration: test-prepare
+	echo "" > testserver.log
 	go test -ldflags -s -v -timeout 1h $(TESTFLAGS) \
-		github.com/openshift/online-archivist/test/integration
+		github.com/openshift/online-archivist/test/integration 2>testserver.log
 .PHONY: test-integration
 
 # Build a release image. The resulting image can be used with test-release.

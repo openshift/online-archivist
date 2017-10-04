@@ -6,7 +6,7 @@ metadata:
 parameters:
 
 - name: NAME
-  description: The name of the DeploymentConfig.
+  description: The primary name to use for the application and it's components.
   value: "archivist"
 - name: GIT_REPO
   description: Git repository housing the Archivist Dockerfile and application code to build and deploy.

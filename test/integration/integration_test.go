@@ -1,7 +1,10 @@
 package integration
 
 import (
+	"os"
 	"testing"
+
+	log "github.com/Sirupsen/logrus"
 )
 
 // TestIntegration is the single entrypoint for integration tests. It uses Go
@@ -12,6 +15,8 @@ import (
 // list. Tests publicly exposed outside the subtest structure won't have access
 // to the harness.
 func TestIntegration(t *testing.T) {
+	log.SetLevel(log.DebugLevel)
+	log.SetOutput(os.Stdout)
 	h := newTestHarness(t)
 
 	t.Run("ExportProjectDoesNotExist", func(t *testing.T) { testExportProjectDoesNotExist(t, h) })

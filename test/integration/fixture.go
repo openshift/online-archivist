@@ -20,8 +20,10 @@ import (
 	buildapi "github.com/openshift/origin/pkg/build/apis/build"
 	buildv1 "github.com/openshift/origin/pkg/build/apis/build/v1"
 	deployv1 "github.com/openshift/origin/pkg/deploy/apis/apps/v1"
+	imageapi "github.com/openshift/origin/pkg/image/apis/image"
 	imagev1 "github.com/openshift/origin/pkg/image/apis/image/v1"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	restclient "k8s.io/client-go/rest"
@@ -35,6 +37,8 @@ type testHarness struct {
 	kc            kclientset.Interface
 	restConfig    *restclient.Config
 	clientFactory *clientcmd.Factory
+	mapper        meta.RESTMapper
+	typer         runtime.ObjectTyper
 
 	pc           projectclientset.Interface
 	ac           authclientset.Interface
@@ -60,6 +64,7 @@ func newTestHarness(t *testing.T) *testHarness {
 	kubeConfigFile := masterConfig.MasterClients.OpenShiftLoopbackKubeConfig
 	loader := kclientcmd.NewNonInteractiveDeferredLoadingClientConfig(&kclientcmd.ClientConfigLoadingRules{ExplicitPath: kubeConfigFile}, &kclientcmd.ConfigOverrides{})
 	f := clientcmd.NewFactory(loader)
+	mapper, typer := f.Object()
 
 	restConfig, err := origintestutil.GetClusterAdminClientConfig(kubeConfig)
 	if err != nil {
@@ -91,6 +96,8 @@ func newTestHarness(t *testing.T) *testHarness {
 		kc:            kc,
 		restConfig:    restConfig,
 		clientFactory: f,
+		mapper:        mapper,
+		typer:         typer,
 
 		pc:    pc,
 		ac:    ac,
@@ -188,7 +195,8 @@ func (h *testHarness) createBuildConfig(t *testing.T, projectName string, name s
 	return buildConfig
 }
 
-func (h *testHarness) createDeploymentConfig(t *testing.T, projectName string, name string) *deployv1.DeploymentConfig {
+func (h *testHarness) createDeploymentConfig(t *testing.T, projectName string,
+	name string, imgStreamName string) *deployv1.DeploymentConfig {
 	dc := &deployv1.DeploymentConfig{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
@@ -196,6 +204,7 @@ func (h *testHarness) createDeploymentConfig(t *testing.T, projectName string, n
 		Spec:   dcSpec(),
 		Status: dcStatus(1),
 	}
+	dc.Spec.Triggers = []deployv1.DeploymentTriggerPolicy{dcImageChangeTrigger(imgStreamName)}
 	var err error
 	dc, err = h.deployClient.AppsV1().DeploymentConfigs(projectName).Create(dc)
 	if err != nil {
@@ -262,14 +271,14 @@ func (h *testHarness) createExternalImageStream(t *testing.T, projectName string
 	return is
 }
 
-func (h *testHarness) createBuild(t *testing.T, projectName string) *buildv1.Build {
+func (h *testHarness) createBuild(t *testing.T, projectName string, buildName string) *buildv1.Build {
 	build := &buildv1.Build{ObjectMeta: metav1.ObjectMeta{
 		Labels: map[string]string{
 			buildapi.BuildConfigLabel:    "mock-build-config",
 			buildapi.BuildRunPolicyLabel: string(buildapi.BuildRunPolicyParallel),
 		},
 	}}
-	build.Name = "test-build"
+	build.Name = buildName
 	build.Spec.Source.Git = &buildv1.GitBuildSource{URI: "http://build.uri/build"}
 	build.Spec.Strategy.DockerStrategy = &buildv1.DockerBuildStrategy{}
 	build.Spec.Output.To = &kapiv1.ObjectReference{
@@ -309,6 +318,21 @@ func dcSpec() deployv1.DeploymentConfigSpec {
 	}
 }
 
+func dcImageChangeTrigger(imgStreamName string) deployv1.DeploymentTriggerPolicy {
+	return deployv1.DeploymentTriggerPolicy{
+		Type: deployv1.DeploymentTriggerOnImageChange,
+		ImageChangeParams: &deployv1.DeploymentTriggerImageChangeParams{
+			Automatic: true,
+			ContainerNames: []string{
+				"container1",
+			},
+			From: kapiv1.ObjectReference{
+				Kind: "ImageStreamTag",
+				Name: imageapi.JoinImageStreamTag(imgStreamName, imageapi.DefaultImageTag),
+			},
+		},
+	}
+}
 func dcStatus(version int64) deployv1.DeploymentConfigStatus {
 	return deployv1.DeploymentConfigStatus{
 		LatestVersion: version,
@@ -349,11 +373,15 @@ func podTemplateSpec() *kapiv1.PodTemplateSpec {
 }
 
 // FindObj finds an object of the given kind and name. If not found it will return nil.
-func findObj(t *testing.T, a *archive.Archiver, list *kapiv1.List, kind string, name string) runtime.Object {
+func findObj(t *testing.T, typer runtime.ObjectTyper, a *archive.Archiver, list *kapiv1.List, kind string, name string) runtime.Object {
 	for _, ro := range list.Items {
 		o := ro.Object
 		if md, err := metav1.ObjectMetaFor(o); err == nil {
-			if a.ObjKind(o) == kind && md.Name == name {
+			oKind, err := archive.ObjKind(typer, o)
+			if err != nil {
+				t.Fatalf("error loading ObjectMeta for: %s", o)
+			}
+			if oKind == kind && md.Name == name {
 				return o
 			}
 		} else {

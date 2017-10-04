@@ -9,18 +9,22 @@ import (
 	"time"
 
 	log "github.com/Sirupsen/logrus"
-	gm "github.com/onsi/gomega"
+	"github.com/stretchr/testify/assert"
 
 	"github.com/openshift/online-archivist/pkg/archive"
 	"github.com/openshift/online-archivist/pkg/util"
 
-	imagev1 "github.com/openshift/origin/pkg/image/apis/image/v1"
 	projectv1 "github.com/openshift/origin/pkg/project/apis/project/v1"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	kapiv1 "k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/printers"
+)
+
+const (
+	localImageStreamName = "localimg"
 )
 
 func getTestProjectName(prefix string) string {
@@ -30,12 +34,11 @@ func getTestProjectName(prefix string) string {
 }
 
 func testExportProjectDoesNotExist(t *testing.T, h *testHarness) {
-	gm.RegisterTestingT(t)
 	a := archive.NewArchiver(h.pc, h.ac, h.uc, h.uidmc, h.idc,
 		h.clientFactory, h.oc, h.kc, "nosuchproject", "user")
-	_, err := a.Export()
-	gm.Expect(err).NotTo(gm.BeNil())
-	gm.Expect(err.Error()).Should(gm.ContainSubstring("not found"))
+	_, err := a.Exporter.Export()
+	assert.NotNil(t, err)
+	assert.Contains(t, err.Error(), "not found")
 }
 
 func createTestProject(t *testing.T, h *testHarness, tlog *log.Entry, pn string) *projectv1.Project {
@@ -56,9 +59,7 @@ func createTestProject(t *testing.T, h *testHarness, tlog *log.Entry, pn string)
 }
 
 func testExport(t *testing.T, h *testHarness) {
-	gm.RegisterTestingT(t)
 	pn := getTestProjectName("exporttest")
-	log.SetLevel(log.DebugLevel)
 	tlog := log.WithFields(log.Fields{
 		"namespace": pn,
 		"test":      "exporttest",
@@ -67,7 +68,6 @@ func testExport(t *testing.T, h *testHarness) {
 	createTestProject(t, h, tlog, pn)
 	defer h.pc.ProjectV1().Projects().Delete(pn, &metav1.DeleteOptions{})
 
-	h.createDeploymentConfig(t, pn, "testdc")
 	h.createSecret(t, pn, "testsecret")
 
 	buildSecret := h.createBuildSecret(t, pn, "dockerbuildsecret")
@@ -91,14 +91,17 @@ func testExport(t *testing.T, h *testHarness) {
 	}
 
 	h.createBuildConfig(t, pn, "testbc")
-	// We do not expect to see this in the results:
-	h.createBuild(t, pn)
+	// This should appear in the exported template, but not be imported:
+	h.createBuild(t, pn, "testbuild")
 	h.createSvcAccount(t, pn, "testserviceaccount")
-	h.createRegistryImageStream(t, pn, "localimg")
+	h.createRegistryImageStream(t, pn, localImageStreamName)
 	h.createExternalImageStream(t, pn, "postgresql")
+	h.createDeploymentConfig(t, pn, "testdc", localImageStreamName)
 	h.createService(t, pn, "testservice")
 
+	// Objects we expect to be exported, not all of these will be imported:
 	expected := []string{
+		"Build/testbuild",
 		"BuildConfig/testbc",
 		"DeploymentConfig/testdc",
 		"Secret/testsecret",
@@ -114,25 +117,21 @@ func testExport(t *testing.T, h *testHarness) {
 
 	a := archive.NewArchiver(h.pc, h.ac, h.uc, h.uidmc, h.idc,
 		h.clientFactory, h.oc, h.kc, pn, "user")
-	list, err := a.Export()
-	gm.Expect(err).NotTo(gm.HaveOccurred())
+	list, err := a.Exporter.Export()
+	assert.Nil(t, err)
 	objList := list.(*kapiv1.List)
-	logAll(tlog, a, objList)
+	logAll(tlog, h.typer, a, objList)
 
 	t.Run("ExpectedObjectsFound", func(t *testing.T) {
-		gm.RegisterTestingT(t)
-		gm.Expect(len(objList.Items)).To(gm.Equal(len(expected)),
-			"expected object count mismatch")
 		for _, s := range expected {
 			tokens := strings.Split(s, "/")
 			kind, name := tokens[0], tokens[1]
-			o := findObj(t, a, objList, kind, name)
-			gm.Expect(o).NotTo(gm.BeNil(), "object was not exported: %s", s)
+			o := findObj(t, h.typer, a, objList, kind, name)
+			assert.NotNil(t, o, "object was not exported: %s", s)
 		}
 	})
 
 	t.Run("ExportedObjectsAreVersioned", func(t *testing.T) {
-		gm.RegisterTestingT(t)
 		// May not be the best way to test if a runtime.Object is "versioned", but this
 		// is exactly how we serialize so very good coverage that the end result is what
 		// we expect.
@@ -141,59 +140,38 @@ func testExport(t *testing.T, h *testHarness) {
 			buf := new(bytes.Buffer)
 			err = p.PrintObj(obj.Object, buf)
 			if err != nil {
-				gm.Expect(err).NotTo(gm.BeNil())
+				assert.NotNil(t, err)
 			}
-			gm.Expect(buf.String()).To(gm.ContainSubstring("apiVersion: v1"))
+			assert.Contains(t, buf.String(), "apiVersion: v1")
 		}
 	})
 
-	t.Run("ExportedObjectsHaveClusterMetadataStripped", func(t *testing.T) {
-		gm.RegisterTestingT(t)
+	// Previously we planned to strip this and use export functionality to do so, however now we aim
+	// to export as much info as possible and sort it out on import instead.
+	t.Run("ExportedObjectsIncludeClusterMetadata", func(t *testing.T) {
 		for _, obj := range objList.Items {
 			accessor, err := meta.Accessor(obj.Object)
-			gm.Expect(err).NotTo(gm.HaveOccurred())
-			gm.Expect(accessor.GetUID()).To(gm.BeZero(), "%s has UID set", accessor.GetName())
-			gm.Expect(accessor.GetNamespace()).To(gm.BeZero(), "%s has namespace set", accessor.GetName())
-			gm.Expect(accessor.GetCreationTimestamp()).To(gm.BeZero(), "%s has creation time set", accessor.GetName())
-			gm.Expect(accessor.GetDeletionTimestamp()).To(gm.BeNil(), "%s has deletion time set", accessor.GetName())
-			gm.Expect(accessor.GetResourceVersion()).To(gm.BeZero(), "%s has resource version set", accessor.GetName())
-			gm.Expect(accessor.GetSelfLink()).To(gm.BeZero(), "%s has self link set", accessor.GetName())
+			t.Logf("checking data is exported on %s", accessor.GetName())
+			assert.NoError(t, err)
+			assert.NotZero(t, accessor.GetUID(), "UID")
+			assert.NotZero(t, accessor.GetNamespace(), "Namespace")
+			assert.NotZero(t, accessor.GetCreationTimestamp(), "CreationTimestamp")
+			assert.NotZero(t, accessor.GetResourceVersion(), "ResourceVersion")
+			assert.NotZero(t, accessor.GetSelfLink(), "SelfLink")
 		}
 	})
 
 	t.Run("ExportedBuilderSAHasCustomDockercfgSecret", func(t *testing.T) {
-		gm.RegisterTestingT(t)
-		bsao := findObj(t, a, objList, "ServiceAccount", "builder")
+		bsao := findObj(t, h.typer, a, objList, "ServiceAccount", "builder")
 		ebsa := bsao.(*kapiv1.ServiceAccount)
-		gm.Expect(len(ebsa.ImagePullSecrets)).To(gm.Equal(1))
-		gm.Expect(ebsa.ImagePullSecrets[0].Name).To(gm.Equal("dockerbuildsecret"))
+		assert.Len(t, ebsa.ImagePullSecrets, 1)
+		assert.Equal(t, "dockerbuildsecret", ebsa.ImagePullSecrets[0].Name)
 	})
 
-	t.Run("ExportedClusterIpIsCleared", func(t *testing.T) {
-		gm.RegisterTestingT(t)
-		so := findObj(t, a, objList, "Service", "testservice")
-		eso := so.(*kapiv1.Service)
-		gm.Expect(len(eso.Spec.ClusterIP)).Should(gm.BeZero())
-		gm.Expect(eso.Spec.ClusterIP).To(gm.Equal(""), "cluster IP is not empty")
-	})
-
-	t.Run("ExportedImageStreamsHaveNoStatus", func(t *testing.T) {
-		gm.RegisterTestingT(t)
-		imgStreamObj := findObj(t, a, objList, "ImageStream", "localimg")
-		is := imgStreamObj.(*imagev1.ImageStream)
-		gm.Expect(is.Status.DockerImageRepository).To(gm.BeZero())
-		gm.Expect(len(is.Status.Tags)).To(gm.Equal(0))
-
-		imgStreamObj = findObj(t, a, objList, "ImageStream", "postgresql")
-		is = imgStreamObj.(*imagev1.ImageStream)
-		gm.Expect(is.Status.DockerImageRepository).To(gm.BeZero())
-		gm.Expect(len(is.Status.Tags)).To(gm.Equal(0))
-	})
-
-	// At this point we want to proceed to import testing. Per our current target of
-	// first being able to import back into the same project name and cluster (leaving
-	// an empty project around after archival), we need to clean out the project.
-	// TODO: hookup project cleanup here, for now we'll just delete it entirely and recreate:
+	// We're now ready to proceed to testing import. We currently plan to initially just support
+	// importing back into the same cluster and namespace, which will be reserved. As such here we
+	// can delete the old project, wait for it to be terminated, and then proceed to recreate
+	// it and import.
 	h.pc.ProjectV1().Projects().Delete(pn, &metav1.DeleteOptions{})
 
 	// Wait for project deletion to complete, can rountinely take >20s.
@@ -208,44 +186,93 @@ func testExport(t *testing.T, h *testHarness) {
 		tlog.Info("project lookup error should indicate project on longer exists: %s", err)
 		return nil
 	})
-	gm.Expect(err).NotTo(gm.HaveOccurred())
+	assert.NoError(t, err)
 
 	// Now recreate the project with the same name. Deletion already deferred before.
 	createTestProject(t, h, tlog, pn)
 
 	t.Run("ImportIntoSameProject", func(t *testing.T) {
 		// Proceed to run import tests using the data exported above:
-		gm.RegisterTestingT(t)
 
 		a := archive.NewArchiver(h.pc, h.ac, h.uc, h.uidmc, h.idc,
 			h.clientFactory, h.oc, h.kc, pn, "user")
 
 		yamlStr, err := archive.SerializeObjList(objList)
-		gm.Expect(err).NotTo(gm.HaveOccurred())
-		err = a.Import(yamlStr)
-		gm.Expect(err).NotTo(gm.HaveOccurred())
+		assert.NoError(t, err)
+		err = a.Importer.Import(yamlStr)
+		assert.NoError(t, err)
 
-		// TODO: add subtests here to validate all the things, just checking error above is not sufficient.
-		// i.e. check expected objects exist, check imgPullSecrets made it onto the default SA, etc.
+		t.Run("BuildConfigImported", func(t *testing.T) {
+			b, err := h.bc.BuildV1().BuildConfigs(pn).Get("testbc", metav1.GetOptions{})
+			assert.NoError(t, err)
+			assert.Equal(t, "testbc", b.Name)
+		})
+
+		t.Run("BuildNotImported", func(t *testing.T) {
+			_, err := h.bc.BuildV1().Builds(pn).Get("testbuild", metav1.GetOptions{})
+			assert.Error(t, err)
+		})
+
+		t.Run("DeploymentConfigImported", func(t *testing.T) {
+			d, err := h.deployClient.AppsV1().DeploymentConfigs(pn).Get("testdc", metav1.GetOptions{})
+			assert.NoError(t, err)
+			assert.Equal(t, "testdc", d.Name)
+		})
+
+		t.Run("SecretsImported", func(t *testing.T) {
+			s, err := h.kc.CoreV1().Secrets(pn).Get("testsecret", metav1.GetOptions{})
+			assert.NoError(t, err)
+			assert.Equal(t, "testsecret", s.Name)
+
+			s, err = h.kc.CoreV1().Secrets(pn).Get("dockerbuildsecret", metav1.GetOptions{})
+			assert.NoError(t, err)
+			assert.Equal(t, "dockerbuildsecret", s.Name)
+		})
+
+		t.Run("ServiceAccountsImported", func(t *testing.T) {
+			sa, err := h.kc.CoreV1().ServiceAccounts(pn).Get("testserviceaccount", metav1.GetOptions{})
+			assert.NoError(t, err)
+			assert.Equal(t, "testserviceaccount", sa.Name)
+		})
+
+		t.Run("ImageStreamsImported", func(t *testing.T) {
+			is, err := h.imageClient.ImageV1().ImageStreams(pn).Get("localimg", metav1.GetOptions{})
+			assert.NoError(t, err)
+			assert.Equal(t, "localimg", is.Name)
+
+			is, err = h.imageClient.ImageV1().ImageStreams(pn).Get("postgresql", metav1.GetOptions{})
+			assert.NoError(t, err)
+			assert.Equal(t, "postgresql", is.Name)
+		})
+
+		t.Run("ServiceImported", func(t *testing.T) {
+			s, err := h.kc.CoreV1().Services(pn).Get("testservice", metav1.GetOptions{})
+			assert.NoError(t, err)
+			assert.Equal(t, "testservice", s.Name)
+		})
+
+		t.Run("ImagePullSecretsMergedOntoDefaultServiceAccount", func(t *testing.T) {
+			// look up build runtime.Object from the server here
+			// bsao := findObj(t, a, objList, "ServiceAccount", "builder")
+			bsa, err := h.kc.CoreV1().ServiceAccounts(pn).Get("builder", metav1.GetOptions{})
+			if err != nil {
+				assert.Len(t, bsa.ImagePullSecrets, 1)
+				assert.Equal(t, "dockerbuildsecret", bsa.ImagePullSecrets[0].Name)
+			}
+		})
 	})
 
-	t.Run("ImportedBuilderSAHasCustomDockercfgSecret", func(t *testing.T) {
-		gm.RegisterTestingT(t)
-		// look up build runtime.Object from the server here
-		// bsao := findObj(t, a, objList, "ServiceAccount", "builder")
-		bsa, err := h.kc.CoreV1().ServiceAccounts(pn).Get("builder", metav1.GetOptions{})
-		if err != nil {
-			gm.Expect(len(bsa.ImagePullSecrets)).To(gm.Equal(1))
-			gm.Expect(bsa.ImagePullSecrets[0].Name).To(gm.Equal("dockerbuildsecret"))
-		}
-	})
 }
 
-func logAll(tlog *log.Entry, a *archive.Archiver, list *kapiv1.List) {
+func logAll(tlog *log.Entry, typer runtime.ObjectTyper, a *archive.Archiver, list *kapiv1.List) {
 	tlog.Infoln("object list:")
 	for _, o := range list.Items {
 		if md, err := metav1.ObjectMetaFor(o.Object); err == nil {
-			tlog.Infof("   %s/%s", a.ObjKind(o.Object), md.Name)
+			kind, err := archive.ObjKind(typer, o.Object)
+			if err != nil {
+				tlog.Errorf("error loading ObjectMeta for: %s", o)
+			}
+			tlog.Infof("   %s/%s", kind, md.Name)
 		} else {
 			tlog.Errorf("error loading ObjectMeta for: %s", o)
 		}
