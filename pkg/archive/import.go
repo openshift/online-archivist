@@ -93,8 +93,12 @@ func (a *Importer) Import(yamlInput string) error {
 		if err != nil {
 			return err
 		}
+		kind, err := ObjKind(a.typer, info.Object)
+		if err != nil {
+			return err
+		}
 		objLog := a.log.WithFields(log.Fields{
-			"object": fmt.Sprintf("%s/%s", ObjKind(a.typer, info.Object), info.Name),
+			"object": fmt.Sprintf("%s/%s", kind, info.Name),
 		})
 
 		// Use the "exporter" to strip fields we should not be setting. This is done (weirdly)

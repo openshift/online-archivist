@@ -163,10 +163,10 @@ func createAndRefresh(info *resource.Info) error {
 
 // ObjKind uses the object typer to lookup the plain kind string for an object. (i.e. Project,
 // Secret, BuildConfig, etc)
-func ObjKind(t runtime.ObjectTyper, o runtime.Object) string {
+func ObjKind(t runtime.ObjectTyper, o runtime.Object) (string, error) {
 	kinds, _, err := t.ObjectKinds(o)
 	if err != nil {
-		log.Fatalf("unable to lookup kind for object: %v", err)
+		return "", fmt.Errorf("unable to lookup kind for object: %v", err)
 	}
-	return kinds[0].Kind
+	return kinds[0].Kind, nil
 }

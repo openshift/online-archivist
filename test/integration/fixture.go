@@ -377,7 +377,11 @@ func findObj(t *testing.T, typer runtime.ObjectTyper, a *archive.Archiver, list 
 	for _, ro := range list.Items {
 		o := ro.Object
 		if md, err := metav1.ObjectMetaFor(o); err == nil {
-			if archive.ObjKind(typer, o) == kind && md.Name == name {
+			oKind, err := archive.ObjKind(typer, o)
+			if err != nil {
+				t.Fatalf("error loading ObjectMeta for: %s", o)
+			}
+			if oKind == kind && md.Name == name {
 				return o
 			}
 		} else {

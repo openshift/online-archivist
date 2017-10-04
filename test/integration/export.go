@@ -268,7 +268,11 @@ func logAll(tlog *log.Entry, typer runtime.ObjectTyper, a *archive.Archiver, lis
 	tlog.Infoln("object list:")
 	for _, o := range list.Items {
 		if md, err := metav1.ObjectMetaFor(o.Object); err == nil {
-			tlog.Infof("   %s/%s", archive.ObjKind(typer, o.Object), md.Name)
+			kind, err := archive.ObjKind(typer, o.Object)
+			if err != nil {
+				tlog.Errorf("error loading ObjectMeta for: %s", o)
+			}
+			tlog.Infof("   %s/%s", kind, md.Name)
 		} else {
 			tlog.Errorf("error loading ObjectMeta for: %s", o)
 		}

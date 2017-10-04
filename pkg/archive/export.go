@@ -143,8 +143,12 @@ func (a *Exporter) scanProjectObjects() error {
 		Flatten()
 
 	err := r.Do().Visit(func(info *resource.Info, err error) error {
+		kind, err := ObjKind(a.typer, info.Object)
+		if err != nil {
+			return err
+		}
 		objLog := a.log.WithFields(log.Fields{
-			"object": fmt.Sprintf("%s/%s", ObjKind(a.typer, info.Object), info.Name),
+			"object": fmt.Sprintf("%s/%s", kind, info.Name),
 		})
 
 		// Need to version the resources for export:
@@ -186,13 +190,17 @@ func (a *Exporter) scanProjectSecrets() ([]string, error) {
 	for i := range secrets.Items {
 		// Need to use the index here as we must use the pointer to use as a runtime.Object:
 		s := secrets.Items[i]
+		kind, err := ObjKind(a.typer, &s)
+		if err != nil {
+			return filteredSecrets, err
+		}
 		objLog := a.log.WithFields(log.Fields{
-			"object": fmt.Sprintf("%s/%s", ObjKind(a.typer, &s), s.Name),
+			"object": fmt.Sprintf("%s/%s", kind, s.Name),
 		})
 
 		objLog.Info("exporting")
 
-		err := a.versionAndAppendObject(&s)
+		err = a.versionAndAppendObject(&s)
 		if err != nil {
 			return filteredSecrets, err
 		}
@@ -215,8 +223,12 @@ func (a *Exporter) scanProjectServiceAccounts(filteredSecretNames []string) erro
 	for i := range sas.Items {
 		// Need to use the index here as we must use the pointer to use as a runtime.Object:
 		s := sas.Items[i]
+		kind, err := ObjKind(a.typer, &s)
+		if err != nil {
+			return err
+		}
 		objLog := a.log.WithFields(log.Fields{
-			"object": fmt.Sprintf("%s/%s", ObjKind(a.typer, &s), s.Name),
+			"object": fmt.Sprintf("%s/%s", kind, s.Name),
 		})
 
 		// Remove image build secrets we filtered during secret export:
@@ -231,7 +243,7 @@ func (a *Exporter) scanProjectServiceAccounts(filteredSecretNames []string) erro
 
 		objLog.Info("exporting")
 
-		err := a.versionAndAppendObject(&s)
+		err = a.versionAndAppendObject(&s)
 		if err != nil {
 			return err
 		}
