@@ -1,0 +1,9 @@
+---
+- command: oc delete project heptio-ark
+  failed_when: false
+
+- pause:
+    seconds: 30
+
+- command: "kubectl delete -f {{ arko_yaml_dir }}/common/"
+  failed_when: false

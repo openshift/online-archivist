@@ -1,0 +1,60 @@
+---
+- name: Check for required vars
+  fail:
+    msg: "Please specify a value for {{ item }}"
+  when: item is undefined
+  with_items:
+  - arko_aws_secret_access_key
+  - arko_aws_access_key_id
+  - arko_aws_region
+  - arko_aws_availability_zone
+  - arko_aws_bucket
+
+- include: uninstall.yml
+#  when: ark_uninstall | bool
+
+# CustomResourceDefinitions only supported as of 3.7:
+- name: Check OpenShift version
+  oc_version:
+  register: oc_version
+
+- debug: var=oc_version
+
+- fail:
+    msg: "Ark can only be deployed on OpenShift 3.7+"
+  when: oc_version.results.openshift_numeric | version_compare('3.7', '<=')
+
+- copy:
+    src: 00-prereqs.yaml
+    dest: "{{ arko_yaml_dir }}/common/"
+
+- name: create ark prereqs
+  command: "kubectl apply -f {{ arko_yaml_dir }}/common/00-prereqs.yaml"
+
+- name: create AWS credentials secret file
+  template:
+    src: aws-creds-template
+    dest: "{{ arko_yaml_dir}}/credentials-ark"
+
+- name: create AWS credentials secret
+  command: "kubectl create secret generic cloud-credentials --namespace heptio-ark --from-file cloud={{ arko_yaml_dir }}/credentials-ark"
+
+- file:
+    path: "{{ arko_yaml_dir }}/aws/"
+    state: directory
+    mode: 0700
+
+- template:
+    src: aws/00-ark-config.yaml
+    dest: "{{ arko_yaml_dir }}/aws/00-ark-config.yaml"
+
+- name: create Ark configuration
+  command: "kubectl apply -f {{ arko_yaml_dir }}/aws/00-ark-config.yaml"
+
+- copy:
+    src: 10-deployment.yaml
+    dest: "{{ arko_yaml_dir }}/common/"
+
+- name: create ark deployment
+  command: "kubectl apply -f {{ arko_yaml_dir }}/common/10-deployment.yaml"
+

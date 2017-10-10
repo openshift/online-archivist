@@ -1,0 +1,8 @@
+online_archivist_appname: "archivist"
+online_archivist_git_repo: "https://github.com/openshift/online-archivist.git"
+online_archivist_git_ref: "master"
+online_archivist_namespace_high_watermark: 10
+online_archivist_namespace_low_watermark: 6
+online_archivist_min_inactive_days: 1
+online_archivist_max_inactive_days: 6
+

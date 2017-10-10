@@ -24,6 +24,10 @@
   - include_role:
       name: lib_openshift
 
+  # Deploy Ark for managing all backup/restore operations:
+  - include_role:
+      name: ark_openshift
+
   - include_role:
       name: oso_archivist
     vars:
