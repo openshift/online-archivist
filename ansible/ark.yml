@@ -1,0 +1,25 @@
+---
+- name: Deploy Heptio Ark
+  hosts: masters
+  remote_user: root
+  run_once: true
+  tasks:
+
+  - set_fact:
+      vars_dir: "./vars/"
+    when: vars_dir is not defined
+
+  - name: Check if vars/ exists
+    local_action: stat path="{{ vars_dir }}"
+    register: vars_dir_stat
+    become: no
+
+  - name: Load all variables from vars/
+    include_vars:
+      dir: "{{ vars_dir }}"
+      extensions:
+      - yml
+    when: vars_dir_stat.stat.exists
+
+  - include_role:
+      name: ark_openshift
