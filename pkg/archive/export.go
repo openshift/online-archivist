@@ -136,7 +136,7 @@ func (a *Exporter) Export() (runtime.Object, error) {
 // Some types are not included in this however and must be dealt with separately. (i.e. Secrets, Service Accounts)
 func (a *Exporter) scanProjectObjects() error {
 
-	r := resource.NewBuilder(a.mapper, a.typer, resource.ClientMapperFunc(a.f.ClientForMapping),
+	r := resource.NewBuilder(a.mapper, a.CategoryExpander(), a.typer, resource.ClientMapperFunc(a.f.ClientForMapping),
 		kapi.Codecs.UniversalDecoder()).
 		NamespaceParam(a.namespace).DefaultNamespace().AllNamespaces(false).
 		ResourceTypeOrNameArgs(true, "all").

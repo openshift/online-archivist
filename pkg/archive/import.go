@@ -8,8 +8,8 @@ import (
 	"github.com/openshift/online-archivist/pkg/util"
 
 	osclient "github.com/openshift/origin/pkg/client"
-	"github.com/openshift/origin/pkg/cmd/cli/cmd"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
+	"github.com/openshift/origin/pkg/oc/cli/cmd"
 	projectclientset "github.com/openshift/origin/pkg/project/generated/clientset"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -81,7 +81,7 @@ func (a *Importer) Import(yamlInput string) error {
 
 	reader := strings.NewReader(yamlInput)
 
-	builder := resource.NewBuilder(a.mapper, a.typer, resource.ClientMapperFunc(a.f.ClientForMapping),
+	builder := resource.NewBuilder(a.mapper, a.CategoryExpander(), a.typer, resource.ClientMapperFunc(a.f.ClientForMapping),
 		kapi.Codecs.UniversalDecoder()).
 		ContinueOnError().
 		NamespaceParam(a.namespace).DefaultNamespace().AllNamespaces(false).

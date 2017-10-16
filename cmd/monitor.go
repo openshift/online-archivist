@@ -14,6 +14,7 @@ import (
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 
 	log "github.com/Sirupsen/logrus"
+	arkclient "github.com/heptio/ark/pkg/client"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -35,6 +36,15 @@ var clusterMonitorCmd = &cobra.Command{
 		if err != nil {
 			log.Panicf("error creating OpenShift/Kubernetes clients: %s", err)
 		}
+
+		// TODO: in Ark this appears to be the binary name when launching the CLI.
+		// Not sure how this is being used.
+		arkFactory := arkclient.NewFactory()
+		arkClient, err := arkFactory.Client()
+		if err != nil {
+			log.Panicf("error creating Ark client: %s", err)
+		}
+		log.Debugf("got ark client: %v", arkClient)
 
 		activityMonitor := clustermonitor.NewClusterMonitor(archivistCfg, archivistCfg.Clusters[0], oc, kc)
 		activityMonitor.Run()
