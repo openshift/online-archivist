@@ -1,30 +1,24 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 )
 
+// unsafeDurationParse parses a duration string with days support, but panics
+// on an error. It is intended to just let us do inline date parsing in tests.
+func unsafeDurationParse(dur string) CustomDuration {
+	duration, err := ParseDurationWithDays(dur)
+	if err != nil {
+		panic(fmt.Sprintf("bad duration in test data: %s", dur))
+	}
+	return duration
+}
+
 func TestConfigParsing(t *testing.T) {
-
-	value, _ := time.ParseDuration("30m")
-	minInactiveDuration1 := MyDuration(value)
-	value, _ = time.ParseDuration("60m")
-	maxInactiveDuration1 := MyDuration(value)
-	value, _ = time.ParseDuration("12h")
-	monitorCheckInterval1 := MyDuration(value)
-
-	// value, _ = time.ParseDuration("720h")
-	value, _ = ParseDays("30d")
-	minInactiveDuration2 := MyDuration(value)
-	// value, _ = time.ParseDuration("1440h")
-	value, _ = ParseDays("60d")
-	maxInactiveDuration2 := MyDuration(value)
-	value, _ = time.ParseDuration("24h")
-	monitorCheckInterval2 := MyDuration(value)
 
 	tests := []struct {
 		name                string
@@ -47,6 +41,8 @@ clusters:
   - very-important
   - special
 dryRun: false
+deleteArchivedNamespaces: true
+archiveTTL: 7d
 monitorCheckInterval: 12h`,
 			expectedConfig: ArchivistConfig{
 				LogLevel: "info",
@@ -57,13 +53,15 @@ monitorCheckInterval: 12h`,
 							HighWatermark: 500,
 							LowWatermark:  400,
 						},
-						MinInactiveDuration: minInactiveDuration1,
-						MaxInactiveDuration: maxInactiveDuration1,
+						MinInactiveDuration: unsafeDurationParse("30m"),
+						MaxInactiveDuration: unsafeDurationParse("60m"),
 						ProtectedNamespaces: []string{"default", "very-important", "special"},
 					},
 				},
-				DryRun:               false,
-				MonitorCheckInterval: monitorCheckInterval1,
+				DryRun:                   false,
+				MonitorCheckInterval:     unsafeDurationParse("12h"),
+				DeleteArchivedNamespaces: true,
+				ArchiveTTL:               unsafeDurationParse("7d"),
 			},
 		},
 		{
@@ -80,12 +78,14 @@ clusters:
 							HighWatermark: 0,
 							LowWatermark:  0,
 						},
-						MaxInactiveDuration: maxInactiveDuration2,
-						MinInactiveDuration: minInactiveDuration2,
+						MinInactiveDuration: unsafeDurationParse("720h"),  // 30 days
+						MaxInactiveDuration: unsafeDurationParse("2160h"), // 90 days
 						ProtectedNamespaces: []string{"default", "openshift-infra"},
 					},
 				},
-				MonitorCheckInterval: monitorCheckInterval2,
+				MonitorCheckInterval:     unsafeDurationParse("24h"),
+				DeleteArchivedNamespaces: false,
+				ArchiveTTL:               unsafeDurationParse(defaultArchiveTTL),
 			},
 		},
 		{

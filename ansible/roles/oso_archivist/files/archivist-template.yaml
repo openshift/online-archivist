@@ -85,7 +85,7 @@ objects:
       dockerStrategy:
         from:
           kind: DockerImage
-          name: golang:1.7
+          name: golang:1.8
     output:
       to:
         kind: ImageStreamTag
@@ -108,11 +108,17 @@ objects:
         minInactiveDays: ${MIN_INACTIVE_DAYS}
         maxInactiveDays: ${MAX_INACTIVE_DAYS}
       protectedNamespaces:
-      - openshift-infra
       - default
-      - openshift
+      - heptio-ark # TODO: remove once ark is in the openshift-infra namespace
+      - kube-public
       - kube-system
       - logging
+      - management-infra
+      - openshift
+      - openshift-infra
+      - openshift-node
+      - ops-health-monitoring
+      - prometheus
 
 - kind: "DeploymentConfig"
   apiVersion: v1
