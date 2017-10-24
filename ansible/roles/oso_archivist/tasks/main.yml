@@ -47,7 +47,7 @@
   delegate_to: localhost
   changed_when: false
 
-- debug: msg="Checking that latest build matches git ref: {{ git_sha1_results.after }}"
+- debug: msg="Checking that latest build matches git ref {{ git_sha1_results.after }}"
 
 - name: Load the start-build role so module is available
   include_role:
