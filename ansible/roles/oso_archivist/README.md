@@ -14,13 +14,10 @@ This role expects to run with system:admin credentials as it creates roles with
 certain elevated privileges to manage the cluster. Typically this is
 accomplished by running as root on a master host.
 
-*WARNING*: When run, this role will always update the template and reprocess it, leading
-to recreating the build and deployment configs, and thus restarting the running
-application. *NOT FOR USE IN ONGOING CONFIG MANAGEMENT LOOPS*
-
 ## Dependencies
 
 - lib_openshift role from openshift-ansible must be loaded in a playbook prior to running this role.
+- oc_start_build_check role from this repo.
 
 ## Role Variables
 
