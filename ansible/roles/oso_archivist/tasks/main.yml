@@ -14,14 +14,13 @@
 
 - debug: msg="Deploying {{ osoa_appname}} from {{ osoa_git_repo }} ref {{osoa_git_ref }}"
 
-- name: copy archivist template
+- name: Copy template
   copy:
     src: archivist-template.yaml
     dest: "{{ osoa_template_path }}"
-    #  register: copy_template_out
 
 # This task should correctly only indicate a change if the underlying template changed.
-- name: create template
+- name: Create template
   oc_obj:
     state: present
     namespace: "{{ osoa_namespace }}"
@@ -30,17 +29,37 @@
     files:
     - "{{ osoa_template_path }}"
 
-- name: oc process template
-  oc_process:
+- name: Apply template
+  shell: "oc process -n {{ osoa_namespace }} archivist -p NAME='{{ osoa_appname }}' -p GIT_REPO='{{ osoa_git_repo }}' -p GIT_REF='{{ osoa_git_ref }}' -p NAMESPACE_HIGH_WATERMARK='{{ osoa_namespace_high_watermark }}' -p NAMESPACE_LOW_WATERMARK='{{ osoa_namespace_low_watermark }}' -p MIN_INACTIVE_DAYS='{{ osoa_min_inactive_days }}' -p MAX_INACTIVE_DAYS='{{ osoa_max_inactive_days }}' | oc apply -n {{ osoa_namespace }} -f -"
+  # apply does not indicate if something changed today. Assume changed_when
+  # false and rely on the template update as our best indicator if something
+  # changed.
+  changed_when: false
+
+- name: Fetch latest git commit
+  git:
+    repo: "{{ osoa_git_repo }}"
+    version: "{{ osoa_git_ref }}"
+    clone: no
+    accept_hostkey: true
+  register: git_sha1_results
+  # Git may not be installed on remote hosts.
+  delegate_to: localhost
+  changed_when: false
+
+- debug: msg="Checking that latest build matches git ref: {{ git_sha1_results.after }}"
+
+- name: Load the start-build role so module is available
+  include_role:
+    name: oc_start_build_check
+
+- name: Start build if required
+  oc_start_build_check:
     namespace: "{{ osoa_namespace }}"
-    template_name: archivist
-    reconcile: True
-    create: True
-    params:
-      NAME: "{{ osoa_appname }}"
-      GIT_REPO: "{{ osoa_git_repo }}"
-      GIT_REF: "{{ osoa_git_ref }}"
-      NAMESPACE_HIGH_WATERMARK: "{{ osoa_namespace_high_watermark }}"
-      NAMESPACE_LOW_WATERMARK: "{{ osoa_namespace_low_watermark }}"
-      MIN_INACTIVE_DAYS: "{{ osoa_min_inactive_days }}"
-      MAX_INACTIVE_DAYS: "{{ osoa_max_inactive_days }}"
+    buildconfig: "{{ osoa_appname }}"
+    git_ref: "{{ git_sha1_results.after }}"
+  register: start_build_out
+
+- debug: var=start_build_out
+
+
