@@ -8,7 +8,7 @@ import yaml
 from ansible.module_utils.basic import AnsibleModule
 
 def start_build(module):
-    run_command(['oc', 'start-build', '-n', module.params['namespace'], module.params['buildconfig']])
+    return run_command(['oc', 'start-build', '-n', module.params['namespace'], module.params['buildconfig']])
 
 
 def main():
@@ -42,7 +42,7 @@ def main():
             expected_latest_build, '-o', 'yaml'])
         latest_build = yaml.safe_load(build_out)
 
-        if latest_build['status']['phase'] == 'Failed':
+        if latest_build['status']['phase'] in ('Failed', 'Error'):
             output_lines.append("Last build failed, running start-build.")
             changed = True
             output_lines.append(start_build(module))
