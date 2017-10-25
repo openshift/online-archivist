@@ -43,19 +43,22 @@ def main():
         latest_build = yaml.safe_load(build_out)
 
         if latest_build['status']['phase'] == 'Failed':
-            output_lines.append("Last build failed, starting another.")
+            output_lines.append("Last build failed, running start-build.")
             changed = True
             output_lines.append(start_build(module))
         elif latest_build['status']['phase'] == 'Running':
-            output_lines.append("Build already running, skipping.")
+            output_lines.append("Build already running, skipping start-build.")
+        elif 'revision' not in latest_build['spec']:
+            # Could indicate the first build is running:
+            output_lines.append("Build has no git revision, state: %s, skipping start-build." % latest_build['status']['phase'])
         else:
             if module.params['git_ref'] != latest_build['spec']['revision']['git']['commit']:
-                output_lines.append("Git refs do not match: %s != %s" % (module.params['git_ref'],
+                output_lines.append("Git refs do not match: %s != %s, running start-build." % (module.params['git_ref'],
                     latest_build['spec']['revision']['git']['commit']))
                 changed = True
                 output_lines.append(start_build(module))
             else:
-                output_lines.append("Git ref matches.")
+                output_lines.append("Git ref matches, skipping start-build.")
 
     module.exit_json(changed=changed, output=output_lines)
 
