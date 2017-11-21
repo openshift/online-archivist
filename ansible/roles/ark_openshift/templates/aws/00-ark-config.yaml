@@ -33,6 +33,9 @@ restoreOnlyMode: false
 resourcePriorities:
   - namespaces
   - serviceaccounts
+  - rolebindingrestrictions.authorization.openshift.io
+  - rolebindings.authorization.openshift.io
+  - rolebindings.rbac.authorization.k8s.io
   - persistentvolumes
   - persistentvolumeclaims
   - secrets

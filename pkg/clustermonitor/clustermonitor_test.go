@@ -2,18 +2,23 @@ package clustermonitor
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/openshift/online-archivist/pkg/config"
 
-	buildapi "github.com/openshift/origin/pkg/build/apis/build"
-	otestclient "github.com/openshift/origin/pkg/client/testclient"
+	buildapi "github.com/openshift/api/build/v1"
+	fakebuildclient "github.com/openshift/client-go/build/clientset/versioned/fake"
 
+	kapiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ktestclient "k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 	kcache "k8s.io/client-go/tools/cache"
-	kapi "k8s.io/kubernetes/pkg/api"
-	ktestclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
+
+	arkv1 "github.com/heptio/ark/pkg/apis/ark/v1"
+	arktestclientset "github.com/heptio/ark/pkg/generated/clientset/versioned/fake"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -23,18 +28,27 @@ func init() {
 	log.SetLevel(log.DebugLevel)
 }
 
+const (
+	testProjectRequester string = "cosmo@example.com"
+)
+
 type NamespaceTestData struct {
 	name                 string
 	builds               []*buildapi.Build
-	rcs                  []*kapi.ReplicationController
+	rcs                  []*kapiv1.ReplicationController
 	expectedLastActivity time.Time
 }
 
-func fakeNamespace(name string) *kapi.Namespace {
-	p := kapi.Namespace{
+func fakeNamespace(name string, projectRequester string) *kapiv1.Namespace {
+	p := kapiv1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
 		},
+	}
+	if projectRequester != "" {
+		p.Annotations = map[string]string{
+			projectRequesterAnnotation: projectRequester,
+		}
 	}
 	return &p
 }
@@ -53,9 +67,9 @@ func fakeBuild(projName string, name string, start time.Time) *buildapi.Build {
 	return &b
 }
 
-func fakeRC(projName string, name string, created time.Time) *kapi.ReplicationController {
+func fakeRC(projName string, name string, created time.Time) *kapiv1.ReplicationController {
 	uct := metav1.NewTime(created)
-	rc := kapi.ReplicationController{
+	rc := kapiv1.ReplicationController{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              name,
 			Namespace:         projName,
@@ -93,7 +107,7 @@ func TestNamespaceLastActivity(t *testing.T) {
 			namespaces: []NamespaceTestData{
 				{
 					name: "namespace1",
-					rcs: []*kapi.ReplicationController{
+					rcs: []*kapiv1.ReplicationController{
 						fakeRC("namespace1", "rc-1", tm(2016, time.November, 1)),
 					},
 					expectedLastActivity: tm(2016, time.November, 1),
@@ -129,7 +143,7 @@ func TestNamespaceLastActivity(t *testing.T) {
 			namespaces: []NamespaceTestData{
 				{
 					name: "namespace1",
-					rcs: []*kapi.ReplicationController{
+					rcs: []*kapiv1.ReplicationController{
 						fakeRC("namespace1", "rc-1", tm(2016, time.November, 1)),
 						fakeRC("namespace1", "rc-2", tm(2017, time.May, 19)),
 						fakeRC("namespace1", "rc-3", tm(2017, time.January, 1)),
@@ -148,7 +162,7 @@ func TestNamespaceLastActivity(t *testing.T) {
 						fakeBuild("namespace1", "build-2", tm(2017, time.November, 19)),
 						fakeBuild("namespace1", "build-3", tm(2017, time.January, 1)),
 					},
-					rcs: []*kapi.ReplicationController{
+					rcs: []*kapiv1.ReplicationController{
 						fakeRC("namespace1", "rc-1", tm(2016, time.December, 1)),
 						fakeRC("namespace1", "rc-2", tm(2017, time.July, 19)),
 						fakeRC("namespace1", "rc-3", tm(2017, time.February, 1)),
@@ -160,11 +174,12 @@ func TestNamespaceLastActivity(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			oc := &otestclient.Fake{}
 			kc := &ktestclient.Clientset{}
 
 			aConfig := config.NewDefaultArchivistConfig()
-			cm := NewClusterMonitor(aConfig, aConfig.Clusters[0], oc, kc)
+			arkClient := arktestclientset.NewSimpleClientset()
+			bc := fakebuildclient.NewSimpleClientset()
+			cm := NewClusterMonitor(aConfig, aConfig.Clusters[0], bc, kc, arkClient)
 
 			// Building our indexers to bypass the Informer framework, which is more
 			// complicated to test and looks to involve sleeping until the informer
@@ -200,116 +215,155 @@ func TestNamespaceLastActivity(t *testing.T) {
 }
 
 type NamespaceCapacityTestData struct {
-	name         string
-	lastActivity time.Time
+	name             string
+	projectRequester string
+	lastActivity     time.Time
 }
 
-func TestGetNamespacesToArchive(t *testing.T) {
+func assertNamespaces(t *testing.T, expected []string, archiveNamespaces []LastActivity) {
+	if assert.Equal(t, len(expected), len(archiveNamespaces)) {
+		for _, expectedName := range expected {
+			found := false
+			for _, la := range archiveNamespaces {
+				if la.Namespace.Name == expectedName {
+					found = true
+					break
+				}
+			}
+			assert.True(t, found, fmt.Sprintf("namespace %s was not found in results", expectedName))
+		}
+	}
+}
+
+func TestArchiveNamespace(t *testing.T) {
+	kc := &ktestclient.Clientset{}
+	aConfig := config.NewDefaultArchivistConfig()
+	arkClient := arktestclientset.NewSimpleClientset()
+	bc := fakebuildclient.NewSimpleClientset()
+	cm := NewClusterMonitor(aConfig, aConfig.Clusters[0], bc, kc, arkClient)
+
+	cm.nsIndexer = kcache.NewIndexer(kcache.MetaNamespaceKeyFunc, kcache.Indexers{})
+	cm.rcIndexer = kcache.NewIndexer(kcache.MetaNamespaceKeyFunc, kcache.Indexers{
+		kcache.NamespaceIndex: kcache.MetaNamespaceIndexFunc,
+	})
+	cm.buildIndexer = kcache.NewIndexer(kcache.MetaNamespaceKeyFunc,
+		kcache.Indexers{
+			kcache.NamespaceIndex: kcache.MetaNamespaceIndexFunc,
+		})
+
+	// Create a fake namespace with no project requester annotation:
+	ns := fakeNamespace("test ns", "")
+	cm.nsIndexer.Add(ns)
+
+	err := cm.archiveNamespace(ns)
+	assert.Error(t, err)
+}
+
+func TestCheckCapacity(t *testing.T) {
 
 	// create values for testing durations
 	value1, _ := time.ParseDuration("720h")
-	minInactiveDuration := config.MyDuration(value1)
+	minInactiveDuration := config.CustomDuration(value1)
 	value2, _ := time.ParseDuration("1440h")
-	maxInactiveDuration := config.MyDuration(value2)
+	maxInactiveDuration := config.CustomDuration(value2)
 
 	tests := []struct {
 		name                string
 		highWatermark       int
 		lowWatermark        int
-		MaxInactiveDuration config.MyDuration
-		MinInactiveDuration config.MyDuration
+		MaxInactiveDuration config.CustomDuration
+		MinInactiveDuration config.CustomDuration
 		namespaces          []NamespaceCapacityTestData
 		checkTime           time.Time
 		expected            []string
 	}{
 		{
-			name:                "over capacity oldest eligible inactive evicted",
+			name:                "OverCapacityOldestEligibleInactiveEvicted",
 			highWatermark:       5,
 			lowWatermark:        3,
 			MaxInactiveDuration: maxInactiveDuration, // Mar 30
 			MinInactiveDuration: minInactiveDuration, // April 29
 			checkTime:           tm(2017, time.May, 29),
 			namespaces: []NamespaceCapacityTestData{
-				{"vinactive1", tm(2015, time.January, 7)},
-				{"vinactive2", tm(2016, time.January, 5)},
-				{"vinactive3", tm(2017, time.January, 9)},
-				{"vinactive4", tm(2017, time.February, 14)},
-				{"vinactive5", tm(2017, time.March, 20)},
-				{"inactive6", tm(2017, time.April, 25)},
-				{"inactive7", tm(2017, time.April, 27)},
-				{"active1", tm(2017, time.May, 25)},
-				{"active2", tm(2017, time.May, 20)},
+				{"vinactive1", testProjectRequester, tm(2015, time.January, 7)},
+				{"vinactive2", testProjectRequester, tm(2016, time.January, 5)},
+				{"vinactive3", testProjectRequester, tm(2017, time.January, 9)},
+				{"vinactive4", testProjectRequester, tm(2017, time.February, 14)},
+				{"vinactive5", testProjectRequester, tm(2017, time.March, 20)},
+				{"inactive6", testProjectRequester, tm(2017, time.April, 25)},
+				{"inactive7", testProjectRequester, tm(2017, time.April, 27)},
+				{"active1", testProjectRequester, tm(2017, time.May, 25)},
+				{"active2", testProjectRequester, tm(2017, time.May, 20)},
 			},
 			// inactive7 should not get archived unnecessarily:
 			expected: []string{"vinactive1", "vinactive2", "vinactive3", "vinactive4", "vinactive5", "inactive6"},
 		},
 		{
-			name:                "over capacity but no namespaces eligible for archival",
+			name:                "OverCapacityNoNamespacesEligible",
 			highWatermark:       5,
 			lowWatermark:        3,
 			MaxInactiveDuration: maxInactiveDuration, // Mar 30
 			MinInactiveDuration: minInactiveDuration, // April 29
 			checkTime:           tm(2017, time.May, 29),
 			namespaces: []NamespaceCapacityTestData{
-				{"active1", tm(2017, time.May, 20)},
-				{"active2", tm(2017, time.May, 25)},
-				{"active3", tm(2017, time.May, 1)},
-				{"active4", tm(2017, time.May, 17)},
-				{"active5", tm(2017, time.May, 25)},
-				{"active6", tm(2017, time.May, 20)},
+				{"active1", testProjectRequester, tm(2017, time.May, 20)},
+				{"active2", testProjectRequester, tm(2017, time.May, 25)},
+				{"active3", testProjectRequester, tm(2017, time.May, 1)},
+				{"active4", testProjectRequester, tm(2017, time.May, 17)},
+				{"active5", testProjectRequester, tm(2017, time.May, 25)},
+				{"active6", testProjectRequester, tm(2017, time.May, 20)},
 			},
 			expected: []string{},
 		},
 		{
-			name:                "over capacity some namespaces eligible for archival but not enough",
+			name:                "OverCapacitySomeNamespacesEligibleForArchivalButNotEnough",
 			highWatermark:       5,
 			lowWatermark:        3,
 			MaxInactiveDuration: maxInactiveDuration, // Mar 30
 			MinInactiveDuration: minInactiveDuration, // April 29
 			checkTime:           tm(2017, time.May, 29),
 			namespaces: []NamespaceCapacityTestData{
-				{"active1", tm(2017, time.May, 20)},
-				{"active2", tm(2017, time.May, 25)},
-				{"inactive1", tm(2017, time.February, 1)},
-				{"active4", tm(2017, time.May, 17)},
-				{"active5", tm(2017, time.May, 25)},
-				{"active6", tm(2017, time.May, 20)},
+				{"active1", testProjectRequester, tm(2017, time.May, 20)},
+				{"active2", testProjectRequester, tm(2017, time.May, 25)},
+				{"inactive1", testProjectRequester, tm(2017, time.February, 1)},
+				{"active4", testProjectRequester, tm(2017, time.May, 17)},
+				{"active5", testProjectRequester, tm(2017, time.May, 25)},
+				{"active6", testProjectRequester, tm(2017, time.May, 20)},
 			},
 			expected: []string{"inactive1"},
 		},
 		{
-			name:                "under capacity but some namespaces over max inactivity",
+			name:                "UnderCapacityButSomeNamespacesOverMaxInactivity",
 			highWatermark:       5,
 			lowWatermark:        3,
 			MaxInactiveDuration: maxInactiveDuration, // Mar 30
 			MinInactiveDuration: minInactiveDuration, // April 29
 			checkTime:           tm(2017, time.May, 29),
 			namespaces: []NamespaceCapacityTestData{
-				{"inactive1", tm(2017, time.January, 20)},
-				{"active2", tm(2017, time.May, 25)},
-				{"inactive2", tm(2017, time.February, 1)},
+				{"inactive1", testProjectRequester, tm(2017, time.January, 20)},
+				{"active2", testProjectRequester, tm(2017, time.May, 25)},
+				{"inactive2", testProjectRequester, tm(2017, time.February, 1)},
 			},
 			expected: []string{"inactive1", "inactive2"},
 		},
 		{
-			name:                "under capacity but protected namespaces over max inactivity",
+			name:                "UnderCapacityButProtectedNamespacesOverMaxInactivity",
 			highWatermark:       5,
 			lowWatermark:        3,
 			MaxInactiveDuration: maxInactiveDuration, // Mar 30
 			MinInactiveDuration: minInactiveDuration, // April 29
 			checkTime:           tm(2017, time.May, 29),
 			namespaces: []NamespaceCapacityTestData{
-				{"openshift-infra", tm(2017, time.January, 20)},
-				{"default", tm(2012, time.January, 20)},
-				{"active2", tm(2017, time.May, 25)},
-				{"inactive2", tm(2017, time.February, 1)},
+				{"openshift-infra", testProjectRequester, tm(2017, time.January, 20)},
+				{"default", testProjectRequester, tm(2012, time.January, 20)},
+				{"active2", testProjectRequester, tm(2017, time.May, 25)},
+				{"inactive2", testProjectRequester, tm(2017, time.February, 1)},
 			},
 			expected: []string{"inactive2"},
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			oc := &otestclient.Fake{}
 			kc := &ktestclient.Clientset{}
 
 			aConfig := config.NewDefaultArchivistConfig()
@@ -318,7 +372,9 @@ func TestGetNamespacesToArchive(t *testing.T) {
 			aConfig.Clusters[0].MaxInactiveDuration = tc.MaxInactiveDuration
 			aConfig.Clusters[0].MinInactiveDuration = tc.MinInactiveDuration
 
-			cm := NewClusterMonitor(aConfig, aConfig.Clusters[0], oc, kc)
+			arkClient := arktestclientset.NewSimpleClientset()
+			bc := fakebuildclient.NewSimpleClientset()
+			cm := NewClusterMonitor(aConfig, aConfig.Clusters[0], bc, kc, arkClient)
 
 			cm.nsIndexer = kcache.NewIndexer(kcache.MetaNamespaceKeyFunc, kcache.Indexers{})
 			cm.rcIndexer = kcache.NewIndexer(kcache.MetaNamespaceKeyFunc, kcache.Indexers{
@@ -334,28 +390,58 @@ func TestGetNamespacesToArchive(t *testing.T) {
 				// Add a single build with the requested activity time:
 				build := fakeBuild(p.name, p.name, p.lastActivity)
 				cm.buildIndexer.Add(build)
-				cm.nsIndexer.Add(fakeNamespace(p.name))
+				cm.nsIndexer.Add(fakeNamespace(p.name, p.projectRequester))
 			}
 
-			archiveNamespaces, err := cm.getNamespacesToArchive(tc.checkTime)
-			if assert.NoError(t, err) {
-				assertNamespaces(t, tc.expected, archiveNamespaces)
-			}
+			t.Run("CalculatesNamespacesToArchive", func(t *testing.T) {
+				archiveNamespaces, err := cm.getNamespacesToArchive(tc.checkTime)
+				if assert.NoError(t, err) {
+					assertNamespaces(t, tc.expected, archiveNamespaces)
+				}
+			})
+
+			t.Run("CreatesArkBackups", func(t *testing.T) {
+				err := cm.checkCapacity(tc.checkTime)
+				if assert.NoError(t, err) {
+					assertArkBackupsCreated(t, tc.expected, arkClient.Actions())
+				}
+			})
 		})
 	}
 }
 
-func assertNamespaces(t *testing.T, expected []string, archiveNamespaces []LastActivity) {
-	if assert.Equal(t, len(expected), len(archiveNamespaces)) {
-		for _, expectedName := range expected {
+func assertArkBackupsCreated(t *testing.T, expectedNamespaces []string, arkActions []ktesting.Action) {
+	if assert.Equal(t, len(expectedNamespaces), len(arkActions), "unexpected backup action count") {
+		for _, ens := range expectedNamespaces {
 			found := false
-			for _, la := range archiveNamespaces {
-				if la.Namespace.Name == expectedName {
+			for _, arkAction := range arkActions {
+				assert.Equal(t, "create", arkAction.GetVerb())
+
+				ca := arkAction.(ktesting.CreateAction)
+				obj := ca.GetObject()
+				backup := obj.(*arkv1.Backup)
+				if backup.Spec.IncludedNamespaces[0] == ens {
 					found = true
+
+					// Make sure the backup appears as we'd expect:
+					assert.Equal(t, 1, len(backup.Spec.IncludedNamespaces))
+					assert.Equal(t, 1, len(backup.Spec.ExcludedResources))
+					assert.Equal(t, "projectrequests.project.openshift.io", backup.Spec.ExcludedResources[0])
+					assert.True(t, strings.HasPrefix(backup.Name, ens))
+					requester, ok := backup.Annotations[projectRequesterAnnotation]
+					if assert.True(t, ok) {
+						assert.Equal(t, testProjectRequester, requester)
+					}
+
+					ans, ok := backup.Labels[archivedNamespaceLabel]
+					if assert.True(t, ok) {
+						assert.Equal(t, ens, ans)
+					}
+
 					break
 				}
 			}
-			assert.True(t, found, fmt.Sprintf("namespace %s was not found in results", expectedName))
+			assert.True(t, found, fmt.Sprintf("namespace %s was not found in results", ens))
 		}
 	}
 }

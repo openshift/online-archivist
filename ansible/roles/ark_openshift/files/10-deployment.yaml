@@ -31,14 +31,15 @@ spec:
       serviceAccountName: ark
       containers:
         - name: ark
-          image: docker.io/dgoodwin/ark:latest
+          image: gcr.io/heptio-images/ark:v0.5.1
+          #image: docker.io/dgoodwin/ark:master
           command:
             - /ark
           args:
             - server
             - --logtostderr
-            - --v
-            - "4"
+            - --log-level
+            - debug
           volumeMounts:
             - name: cloud-credentials
               mountPath: /credentials

@@ -28,21 +28,6 @@ test-prepare: build
 	go build -i github.com/openshift/online-archivist/test/...
 .PHONY: test-prepare
 
-# Runs the integration tests.
-#
-# Args:
-#   TESTFLAGS: Flags to pass to `go test`. The `-v` argument is always passed.
-#   See test/integration/helper.go for the list of possible fixture options.
-#
-# Example:
-#   make test-integration
-#   make test-integration TESTFLAGS="-run TestIntegration/SubscriptionUpgrade"
-test-integration: test-prepare
-	echo "" > testserver.log
-	go test -ldflags -s -v -timeout 1h $(TESTFLAGS) \
-		github.com/openshift/online-archivist/test/integration 2>testserver.log
-.PHONY: test-integration
-
 # Build a release image. The resulting image can be used with test-release.
 #
 # Args:
@@ -89,7 +74,6 @@ help:
 	@echo "OpenShift Online Archivist Controller"
 	@echo ""
 	@echo "make build                compile binaries"
-	@echo "make test-integration     run integration tests"
 	@echo "make release              build release image using Dockerfile"
 	@echo "make test-release         run unit and integration tests in Docker container"
 	@echo "make verify               lint source code"

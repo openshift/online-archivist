@@ -3,12 +3,22 @@ package: github.com/openshift/online-archivist
 import:
 # This is the core Origin dependency.
 # TODO: update version, maybe use origin too
-- package: github.com/openshift/origin
-  version: v3.6.0
-  repo:    git@github.com:openshift/origin.git
-  vcs:     git
+- package: github.com/openshift/client-go
+  version: master
+- package: k8s.io/apimachinery
+  version: release-1.8
+- package: k8s.io/api
+  version: release-1.8
+- package: k8s.io/client-go
+  version: release-5.0
+  #- package: k8s.io/apimachinery
+  #version: 1fd2e63a9a370677308a42f24fd40c86438afddf
+- package: github.com/openshift/api
+  version: master
 - package: github.com/Sirupsen/logrus
-  version: v0.11.5
-  repo:    https://github.com/Sirupsen/logrus.git
-  vcs:     git
-
+  version: v1.0.3
+- package: github.com/heptio/ark
+  version: master
+  #- package: github.com/Azure/azure-sdk-for-go
+  #version: 10.2.1-beta
+- package: github.com/pkg/errors
