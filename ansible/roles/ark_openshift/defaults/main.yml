@@ -1,2 +1,5 @@
 ---
 arko_yaml_dir: "/opt/ark/"
+# WARNING: ark currently assumes you must use this namespace
+arko_namespace: "heptio-ark"
+arko_uninstall: False

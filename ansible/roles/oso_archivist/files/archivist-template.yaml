@@ -109,7 +109,7 @@ objects:
         maxInactiveDays: ${MAX_INACTIVE_DAYS}
       protectedNamespaces:
       - default
-      - heptio-ark # TODO: remove once ark is in the openshift-infra namespace
+      - heptio-ark
       - kube-public
       - kube-system
       - logging

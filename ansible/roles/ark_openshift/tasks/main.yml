@@ -11,33 +11,40 @@
   - arko_aws_bucket
 
 - include: uninstall.yml
-#  when: ark_uninstall | bool
+  when: arko_uninstall | bool
 
 # CustomResourceDefinitions only supported as of 3.7:
 - name: Check OpenShift version
   oc_version:
   register: oc_version
 
-- debug: var=oc_version
-
 - fail:
     msg: "Ark can only be deployed on OpenShift 3.7+"
   when: oc_version.results.openshift_numeric | version_compare('3.7', '<=')
 
-- copy:
+- name: copy ark prereqs
+  template:
     src: 00-prereqs.yaml
-    dest: "{{ arko_yaml_dir }}/common/"
+    dest: "{{ arko_yaml_dir}}/common/"
 
 - name: create ark prereqs
   command: "kubectl apply -f {{ arko_yaml_dir }}/common/00-prereqs.yaml"
+  # TODO: all kubectl apply commands here are using change_when false until kubectl can inform
+  # us when something changed or not. (hopefully 1.9)
+  changed_when: false
+
+- name: base64 encode cloud credentials
+  set_fact:
+    cloud_creds: "{{ '[default]\naws_access_key_id={{ arko_aws_access_key_id }}\naws_secret_access_key={{ arko_aws_secret_access_key }}\n' | b64encode }}"
 
 - name: create AWS credentials secret file
   template:
-    src: aws-creds-template
-    dest: "{{ arko_yaml_dir}}/credentials-ark"
+    src: cloud-credentials-secret.yaml
+    dest: "{{ arko_yaml_dir}}/cloud-credentials-secret.yaml"
 
 - name: create AWS credentials secret
-  command: "kubectl create secret generic cloud-credentials --namespace heptio-ark --from-file cloud={{ arko_yaml_dir }}/credentials-ark"
+  command: "kubectl apply --namespace {{ arko_namespace }} -f {{ arko_yaml_dir }}/cloud-credentials-secret.yaml"
+  changed_when: false
 
 - file:
     path: "{{ arko_yaml_dir }}/aws/"
@@ -50,11 +57,13 @@
 
 - name: create Ark configuration
   command: "kubectl apply -f {{ arko_yaml_dir }}/aws/00-ark-config.yaml"
+  changed_when: false
 
-- copy:
+- template:
     src: 10-deployment.yaml
     dest: "{{ arko_yaml_dir }}/common/"
 
 - name: create ark deployment
   command: "kubectl apply -f {{ arko_yaml_dir }}/common/10-deployment.yaml"
+  changed_when: false
 
