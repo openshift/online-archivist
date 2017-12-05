@@ -41,7 +41,7 @@ spec:
             - --log-level
             - debug
           volumeMounts:
-            - name: cloud-credentials
+            - name: ark-cloud-credentials
               mountPath: /credentials
           env:
             - name: AWS_SHARED_CREDENTIALS_FILE
@@ -49,6 +49,6 @@ spec:
           # TODO: for development
           imagePullPolicy: Always
       volumes:
-        - name: cloud-credentials
+        - name: ark-cloud-credentials
           secret:
-            secretName: cloud-credentials
+            secretName: ark-cloud-credentials

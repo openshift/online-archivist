@@ -89,12 +89,6 @@ spec:
 
 ---
 apiVersion: v1
-kind: Namespace
-metadata:
-  name: heptio-ark
-
----
-apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: ark
