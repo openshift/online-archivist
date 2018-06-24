@@ -62,12 +62,6 @@ Unit tests:
 $ make test
 ```
 
-Integration tests (launches an OpenShift master and etcd internally to work against):
-
-```
-$ make test-integration
-```
-
 # Deploy To an OpenShift Cluster
 
 TODO: An ansible role is in progress that should allow deploying to any
